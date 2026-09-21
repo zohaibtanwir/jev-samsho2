@@ -168,11 +168,14 @@ class Bridge:
             out.append(doc)
         return out
 
+    stop_requested = False
+
     def run(self, seconds: float) -> None:
-        self._log(f"bridge start source={self.source} tick={TICK_S:.3f}s")
-        t_end = time.monotonic() + seconds
+        """Run for `seconds`; 0 or less means until stop_requested (SIGTERM)."""
+        self._log(f"bridge start source={self.source} tick={TICK_S:.3f}s seconds={seconds}")
+        t_end = time.monotonic() + seconds if seconds > 0 else float("inf")
         last_seq, last_report = None, time.monotonic()
-        while time.monotonic() < t_end:
+        while time.monotonic() < t_end and not self.stop_requested:
             t0 = time.perf_counter()
             st = read_state(self.state_path)
             if st is not None and st.get("seq") != last_seq and st.get("match_live"):
@@ -190,7 +193,7 @@ class Bridge:
 def main(argv: list[str] | None = None) -> int:
     import argparse
     ap = argparse.ArgumentParser(description="samsho2 bridge (dummy decision-maker)")
-    ap.add_argument("--seconds", type=float, default=30.0)
+    ap.add_argument("--seconds", type=float, default=0.0, help="run time; 0 = until SIGTERM/SIGINT")
     ap.add_argument("--wait", type=float, default=90.0, help="max seconds to wait for a live match")
     a = ap.parse_args(argv)
     t0 = time.monotonic()
@@ -201,7 +204,12 @@ def main(argv: list[str] | None = None) -> int:
         if time.monotonic() - t0 > a.wait:
             print("no live match"); return 1
         time.sleep(0.1)
-    Bridge(DummyDecisionMaker(), source="dummy").run(a.seconds)
+    import signal
+    bridge = Bridge(DummyDecisionMaker(), source="dummy")
+    def _stop(signum, frame):
+        bridge.stop_requested = True
+    signal.signal(signal.SIGTERM, _stop); signal.signal(signal.SIGINT, _stop)
+    bridge.run(a.seconds)
     return 0
 
 
