@@ -34,7 +34,8 @@ class Writer(unittest.TestCase):
             d1 = w.write({"p1": "attack"}, "test"); d2 = w.write({"p2": "block", "p1": "advance"}, "test")
             self.assertEqual((d1["seq"], d2["seq"]), (1, 2))
             on_disk = json.load(open(w.path))
-            self.assertEqual(on_disk, {"seq": 2, "source": "test", "p1": {"intent": "advance"}, "p2": {"intent": "block"}})
+            self.assertEqual(on_disk["seq"], 2); self.assertEqual(on_disk["source"], "test"); self.assertIsInstance(on_disk["session"], int)
+            self.assertEqual({k: on_disk[k] for k in ("p1", "p2")}, {"p1": {"intent": "advance"}, "p2": {"intent": "block"}})
             self.assertFalse(os.path.exists(w.tmp))
             text = json.dumps(on_disk)
             for button in ("P1 A", "P2 B", "Right", "Left", "Up", "Down"):

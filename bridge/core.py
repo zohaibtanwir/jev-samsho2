@@ -90,13 +90,18 @@ class ActionWriter:
 
     def __init__(self, path: str = ACTION_PATH, tmp: str = ACTION_TMP):
         self.path, self.tmp, self.seq = path, tmp, 0
+        self.session = int(time.time())          # Lua resets its seq bookkeeping when this changes
+        try:
+            os.remove(path)                      # never let a previous session's file be read first
+        except FileNotFoundError:
+            pass
 
     def write(self, intents: dict[str, str], source: str) -> dict[str, Any]:
         for w, it in intents.items():
             if w not in FIGHTERS or it not in INTENTS:
                 raise ValueError(f"bad intent {w}={it!r}")
         self.seq += 1
-        doc: dict[str, Any] = {"seq": self.seq, "source": source}
+        doc: dict[str, Any] = {"seq": self.seq, "session": self.session, "source": source}
         for w, it in intents.items():
             doc[w] = {"intent": it}
         with open(self.tmp, "w") as f:

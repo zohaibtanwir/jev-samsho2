@@ -31,11 +31,13 @@ renames it over `<name>.json`, so a reader never sees a half-written file
 ## action.json — written by the bridge, read by Lua (sam-e8s.1)
 
 ```json
-{"seq": 4, "source": "jev", "p1": {"intent": "attack"}, "p2": {"intent": "retreat"}}
+{"seq": 4, "session": 1789994000, "source": "jev", "p1": {"intent": "attack"}, "p2": {"intent": "retreat"}}
 ```
 
-- `seq` must increase; Lua applies a file once, when `seq` is newer than the
-  last one it consumed. Stale or unchanged files are ignored.
+- `seq` must increase within a `session` (the bridge's start time); Lua applies
+  a file once, when `seq` is newer than the last one it consumed in that
+  session, and resets its high-water mark when `session` changes. Both sides
+  delete a leftover `action.json` at startup.
 - `intent` per fighter is one of `advance retreat attack block bait`, plus
   `none` (release all inputs; used by tests and Pause). A fighter key may be
   omitted to leave that fighter alone.

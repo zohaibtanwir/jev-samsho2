@@ -94,6 +94,7 @@ C.PRESS_LOG = "/tmp/sam2/presses.log"
 C.INTENTS = { advance = true, retreat = true, attack = true, block = true, bait = true, none = true }  -- none: release everything (tests, pause)
 C.SNAP_ON_ACTION = false
 local last_action_seq = 0
+local last_action_session = nil
 local press_f
 local function press_log(line)
   press_f = press_f or io.open(C.PRESS_LOG, "a")
@@ -108,7 +109,11 @@ function C.poll_action(st, frame)
   local f = io.open(C.ACTION_PATH, "r"); if not f then return nil end
   local txt = f:read("a"); f:close()
   local ok, a = pcall(C.decode, txt)
-  if not ok or type(a) ~= "table" or type(a.seq) ~= "number" or a.seq <= last_action_seq then return nil end
+  if not ok or type(a) ~= "table" or type(a.seq) ~= "number" then return nil end
+  -- a new bridge session restarts at seq 1: forget the old high-water mark
+  -- (a stale file from an earlier run once made Lua ignore a whole match: sam-yku.6 notes)
+  if a.session ~= last_action_session then last_action_session = a.session; last_action_seq = 0; SM.say("frame %d  action session %s", frame, tostring(a.session)) end
+  if a.seq <= last_action_seq then return nil end
   last_action_seq = a.seq
   local applied = {}
   for _, who in ipairs({ "p1", "p2" }) do
@@ -219,6 +224,7 @@ function C.init()
   tr1, tr2 = MV.new_tracker(C.P1_NAME), MV.new_tracker(C.P2_NAME)
   seq = 0
   os.remove(C.CONTROL_PATH)
+  os.remove(C.ACTION_PATH)          -- leftovers from a previous session must not be applied
   C.start_control_coroutine()
 end
 
