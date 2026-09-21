@@ -6,6 +6,26 @@
 -- are not the player. See bead sam-aug.2 notes for the search runs.
 local M = {}
 
+-- ---------------------------------------------------------------------------
+-- The fighter objects MOVE between rounds (found while closing sam-l4r.5:
+-- round 1 P1 at 0x105A80, round 2 at 0x104E20; P2 0x1065C0 -> 0x1030E0).
+-- Two 32-bit pointers in low work RAM always point at the live objects:
+--   P1 object pointer 0x100A46, P2 object pointer 0x100A4A
+-- (found by diffing full RAM dumps between rounds: the only words that moved
+-- by exactly the same delta as the X address). All fields below are offsets
+-- from that base; the absolute addresses recorded by sam-aug.2/3/4 are the
+-- round-1 values (base + offset) and are kept for reference.
+-- ---------------------------------------------------------------------------
+M.P1_PTR, M.P2_PTR = 0x100A46, 0x100A4A
+M.OFF = { x = 0x4E, y = 0x50, score = 0x92, health = 0xBA, state = 0xC4, hits = 0xE4, rage = 0xF0 }
+M.BASE_R1 = { p1 = 0x105A80, p2 = 0x1065C0 }
+
+function M.base(space, who)
+  local b = space:read_u32(who == "p1" and M.P1_PTR or M.P2_PTR)
+  if b < 0x100000 or b > 0x10FF00 then return nil end
+  return b
+end
+
 M.P1_P2_STRIDE = 0xB40
 
 M.p1 = {
@@ -42,12 +62,15 @@ function M.read(space, e)
   return space:read_u16(e.addr)
 end
 
--- Read all fields of a player block into a table.
+-- Read all fields of a player block into a table, following the object pointer.
+-- p is M.p1 or M.p2 (used only to know which pointer to follow).
 function M.read_player(space, p)
-  local st = M.read(space, p.state)
-  local y = M.read(space, p.y)
-  return { x = M.read(space, p.x), y = y, health = M.read(space, p.health), rage = M.read(space, p.rage),
-           state = st, crouching = (st == M.STATE_CROUCH), airborne = (st == M.STATE_AIR) or (y < M.ground_y) }
+  local who = (p == M.p1) and "p1" or "p2"
+  local b = M.base(space, who) or M.BASE_R1[who]
+  local st = space:read_u16(b + M.OFF.state)
+  local y = space:read_u16(b + M.OFF.y)
+  return { x = space:read_u16(b + M.OFF.x), y = y, health = space:read_u16(b + M.OFF.health), rage = space:read_u8(b + M.OFF.rage),
+           state = st, crouching = (st == M.STATE_CROUCH), airborne = (st == M.STATE_AIR) or (y < M.ground_y), base = b }
 end
 
 function M.bcd(v) return (v >> 4) * 10 + (v & 0xF) end

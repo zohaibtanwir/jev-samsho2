@@ -155,16 +155,14 @@ function C.init()
 end
 
 local function fighter(name, p, tr, other)
-  local w = MM.read(space, p.state)
-  local d = tr:update(w)
-  local y = MM.read(space, p.y)
+  local r = MM.read_player(space, p)          -- follows the per-round object pointer
+  local d = tr:update(r.state)
   return {
-    char = name, x = MM.read(space, p.x), y = y,
-    health = MM.read(space, p.health), max_health = MM.health_max,
-    rage = MM.read(space, p.rage), rage_max = MM.rage_max,
-    action = d.phase, action_name = d.name, action_word = w, action_age = d.age,
-    airborne = (w == MM.STATE_AIR) or (y < MM.ground_y),
-    crouching = (w == MM.STATE_CROUCH),
+    char = name, x = r.x, y = r.y,
+    health = r.health, max_health = MM.health_max,
+    rage = r.rage, rage_max = MM.rage_max,
+    action = d.phase, action_name = d.name, action_word = r.state, action_age = d.age,
+    airborne = r.airborne, crouching = r.crouching, base = r.base,
   }
 end
 

@@ -31,26 +31,36 @@ KEY_ENV = "TYPESAFE_API_KEY"
 
 INTENTS = ("advance", "retreat", "attack", "block", "bait")
 
-# Question wording reused from ~/projects/jev_latency.py (the version that
-# produced the confirmed sample), minus anti_air and the score question.
+# Heavy-slash reach per character, in pixels of gap (sam-amj.5 / sam-aug.2):
+# Earthquake's A+B landed at the 160 px start gap and whiffed at 60;
+# Nakoruru needed ~45 frames of walking from 160 before anything landed.
+REACH = {"Earthquake": {"min": 80, "max": 175}, "Nakoruru": {"min": 0, "max": 110}}
+
+# Same two questions and five options as PRD section 9. The criteria wording
+# was rewritten on 21 Sep 2026 (bead sam-l4r.5): under the first wording
+# ("attack ... only when they are in recovery") both fighters chose advance
+# 99% of the time and stood face to face for a whole round.
 QUESTIONS: dict[str, Any] = {
     "opponent_recovering": {
         "type": "noul",
         "instructions": (
-            "Is the opponent currently stuck in recovery frames from an "
-            "attack that missed, such that a counterattack would connect "
-            "before they can block?"
+            "Is the opponent currently in recovery frames from an attack, or "
+            "otherwise unable to block or move for the next few frames?"
         ),
     },
     "action": {
         "type": "choice",
-        "instructions": "What should I do in the next half second?",
+        "instructions": (
+            "What should I do in the next half second? This is a weapon fighting game: "
+            "rounds are won by landing heavy slashes, and standing still next to the "
+            "opponent gains nothing."
+        ),
         "criteria": {
-            "advance": "Close the gap. Correct when they are passive or cornered and I have a health lead to protect by applying pressure.",
-            "retreat": "Create space. Correct when they have rage built, or when I am at low health and want to run the clock.",
-            "attack": "Commit to a heavy slash now. Correct only when they are in recovery or otherwise cannot block.",
-            "block": "Hold guard. Correct when they are closing in and I cannot read what is coming.",
-            "bait": "Whiff an attack deliberately at range to draw a reaction I can punish.",
+            "attack": "Swing my heavy slash now. Correct when me.in_range is true and the opponent is idle, walking, or in recovery. Also correct when the opponent is recovering from a missed attack. This is the default choice when in range.",
+            "advance": "Walk toward the opponent. Correct when me.in_range is false and the opponent is not attacking.",
+            "block": "Hold guard. Correct when the opponent is in startup or active attack frames and within their reach.",
+            "bait": "Whiff a light attack at the edge of range to draw a reaction I can punish. Correct when both of us are idle just outside range.",
+            "retreat": "Step back. Correct when I am low on health with a lead to protect, or the opponent has full rage and I am not in range.",
         },
     },
 }
@@ -77,13 +87,24 @@ class Decision:
 
 # ---------------------------------------------------------------- request
 
-def _fighter(f: dict[str, Any], side: str) -> dict[str, Any]:
+def in_range(char: str, gap: int) -> bool:
+    r = REACH.get(char, {"min": 0, "max": 110})
+    return r["min"] <= gap <= r["max"]
+
+
+def _fighter(f: dict[str, Any], side: str, gap: int) -> dict[str, Any]:
+    idle = f["action"] in ("idle", "walk_fwd", "walk_back", "crouch")
     return {
         "char": f["char"], "side": side, "x": f["x"], "y": f["y"],
         "health": f["health"], "max_health": f.get("max_health", 128),
         "rage": f["rage"], "rage_max": f.get("rage_max", 32),
         "state": f.get("action_name") or f["action"],
         "phase": f["action"],
+        "idle_frames": int(f.get("action_age", 0)) if idle else 0,
+        "in_range": in_range(f["char"], gap),
+        "attacking": f["action"] in ("startup", "active"),
+        "recovering": f["action"] == "recovery",
+        "stunned": f["action"] == "hitstun",
         "airborne": bool(f["airborne"]), "crouching": bool(f["crouching"]),
     }
 
@@ -94,13 +115,14 @@ def build_state(state: dict[str, Any], who: str, last_opponent_actions: list[str
     me, them = state[me_key], state[them_key]
     me_side = "left" if me["x"] <= them["x"] else "right"
     them_side = "right" if me_side == "left" else "left"
+    gap = abs(them["x"] - me["x"])
     return {
         "game": "Samurai Shodown II",
         "frame": state["frame"],
         "timer": state["timer"],
-        "me": _fighter(me, me_side),
-        "them": _fighter(them, them_side),
-        "gap_px": abs(them["x"] - me["x"]),
+        "me": _fighter(me, me_side, gap),
+        "them": _fighter(them, them_side, gap),
+        "gap_px": gap,
         "last_3_opponent_actions": list(last_opponent_actions)[-3:],
     }
 

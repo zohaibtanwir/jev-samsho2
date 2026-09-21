@@ -68,6 +68,24 @@ class BuildRequest(unittest.TestCase):
         for k in ("x", "y", "health", "max_health", "rage", "state", "airborne", "crouching"):
             self.assertIn(k, st["me"]); self.assertIn(k, st["them"])
 
+    def test_in_range_and_idle_frames(self):
+        st = json.loads(json.dumps(STATE))
+        st["p1"]["x"], st["p2"]["x"] = 240, 400          # gap 160: in Earthquake's reach, not Nakoruru's
+        st["p1"]["action"], st["p1"]["action_age"] = "idle", 90
+        st["p2"]["action"], st["p2"]["action_age"] = "startup", 3
+        me = jev.build_state(st, "p1", [])
+        self.assertTrue(me["me"]["in_range"]); self.assertFalse(me["them"]["in_range"])
+        self.assertEqual(me["me"]["idle_frames"], 90); self.assertEqual(me["them"]["idle_frames"], 0)
+        self.assertTrue(me["them"]["attacking"]); self.assertFalse(me["me"]["attacking"])
+        st["p2"]["x"] = 300                               # gap 60: too close for Earthquake, fine for Nakoruru
+        me = jev.build_state(st, "p1", []); self.assertFalse(me["me"]["in_range"]); self.assertTrue(me["them"]["in_range"])
+        self.assertEqual(jev.build_state(st, "p2", [])["me"]["in_range"], True)
+
+    def test_criteria_mention_in_range(self):
+        c = jev.QUESTIONS["action"]["criteria"]
+        self.assertIn("in_range", c["attack"]); self.assertIn("in_range", c["advance"])
+        self.assertEqual(set(c), set(jev.INTENTS))
+
     def test_state_fields_for_p2_are_mirrored(self):
         st = jev.build_state(STATE, "p2", [])
         self.assertEqual(st["me"]["char"], "Nakoruru"); self.assertEqual(st["me"]["side"], "right")

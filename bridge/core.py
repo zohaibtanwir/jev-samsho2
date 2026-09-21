@@ -144,6 +144,7 @@ class Bridge:
                  log_path: str = LOG_PATH, poll_s: float = 0.002, relay=None):
         self.dm, self.source = decision_maker, source
         self.relay = relay
+        self.gate = "-"
         self.last_decision: dict[str, dict[str, Any]] = {}
         self.state_path, self.poll_s = state_path, poll_s
         self.writer = writer or ActionWriter()
@@ -159,7 +160,11 @@ class Bridge:
     def _round_live(self, state: dict[str, Any]) -> bool:
         # No round-phase field yet: treat a KO'd fighter as 'not live' so we do
         # not burn calls between rounds (findings in sam-e8s.2 / sam-e8s.4).
-        return bool(state.get("match_live")) and state["p1"]["health"] > 0 and state["p2"]["health"] > 0
+        if not state.get("match_live"):
+            self.gate = "match_live=false"; return False
+        if state["p1"]["health"] <= 0 or state["p2"]["health"] <= 0:
+            self.gate = f"health p1={state['p1']['health']} p2={state['p2']['health']}"; return False
+        self.gate = "live"; return True
 
     def step(self, state: dict[str, Any]) -> list[dict[str, Any]]:
         """One pass with a fresh state: update history, fire due fighters."""
@@ -184,11 +189,16 @@ class Bridge:
     def _step_async(self, state: dict[str, Any]) -> list[dict[str, Any]]:
         """Jev path: issue due calls without waiting, apply finished ones (newest wins)."""
         out = []
-        if self._round_live(state):
-            for who in self.ticker.due():
+        live = self._round_live(state)
+        due = self.ticker.due()          # keep the schedule moving even when gated
+        if state["frame"] % 60 == 0:
+            self._log(f"state frame={state['frame']} timer={state['timer']} hp={state['p1']['health']}/{state['p2']['health']} "
+                      f"gap={state['gap']} p1={state['p1']['action']} p2={state['p2']['action']} gate={self.gate} in_flight={self.dm.in_flight()}")
+        if live:
+            for who in due:
                 other = "p2" if who == "p1" else "p1"
                 self.dm.tick(state, who, self.history.last(other))
-                self._log(f"call {who} state_seq={state['seq']} frame={state['frame']} in_flight={self.dm.in_flight()}")
+                self._log(f"call {who} state_seq={state['seq']} frame={state['frame']} hp={state[who]['health']} in_flight={self.dm.in_flight()}")
         for r, apply in self.dm.drain():
             a = self.dm.applier
             if r.decision is None:
@@ -235,7 +245,11 @@ class Bridge:
             st = read_state(self.state_path)
             if st is not None and st.get("seq") != last_seq and st.get("match_live"):
                 last_seq = st["seq"]
-                self.step(st)
+                try:
+                    self.step(st)
+                except Exception as e:      # never let one bad state kill the loop; log it
+                    import traceback
+                    self._log("EXCEPTION in step: " + traceback.format_exc().replace("\n", " | "))
                 if self.relay:
                     self.relay.publish(self.telemetry(st))
             self.stats.add((time.perf_counter() - t0) * 1000.0)
