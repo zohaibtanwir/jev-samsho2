@@ -3,11 +3,12 @@
 -- Nakoruru (P2) with no human input. This is the Start sequence the bridge
 -- and the Tauri app will reuse (PRD section 6).
 --
--- Standalone:  /run-lua lua/start_match.lua 3
---   (MAME launched from ~/mame with -skip_gameinfo -sound none)
--- Embedded:    SAM2_EMBED = true; local sm = dofile(dir .. "start_match.lua")
---              then call sm.tick(frame) from your own frame notifier; it
---              returns true once the sequence has finished.
+-- This file is a module with no side effects. Use it from any script:
+--   local SM = dofile(dir .. "start_match.lua"); SM.open_log()
+--   then call SM.tick(frame) from your frame notifier; it returns true once
+--   the sequence has finished. Standalone check: lua/start_match_run.lua.
+-- (A global flag cannot be used to switch modes: MAME gives each autoboot
+-- script its own globals, so a dofile'd chunk does not see them.)
 --
 -- Timeline (frames from script start), all proven in sam-2r2.x / sam-g6e.1:
 --   300 Coin 1, 340 Coin 1, 420 1 Player Start, 500 2 Players Start,
@@ -83,24 +84,6 @@ function M.tick(frame)
     end
   end
   return frame >= M.SEQUENCE_END
-end
-
--- ---- standalone --------------------------------------------------------------
-if not SAM2_EMBED then
-  M.open_log()
-  local SNAP_AT = {}
-  for fr = M.SEQUENCE_END + 60, M.SEQUENCE_END + 1500, 120 do SNAP_AT[fr] = true end
-  local DONE_AT = M.SEQUENCE_END + 1560
-  local frame, sub = 0, nil
-  sub = emu.add_machine_frame_notifier(function()
-    frame = frame + 1
-    M.tick(frame)
-    if SNAP_AT[frame] then
-      local ok, err = pcall(function() manager.machine.video:snapshot() end)
-      say("frame %5d  snapshot %s", frame, ok and "ok" or tostring(err))
-    end
-    if frame == DONE_AT then say("frame %5d  done", frame); log:close(); sub = nil end
-  end)
 end
 
 return M
