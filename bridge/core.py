@@ -319,6 +319,38 @@ class Bridge:
         self.log.close()
 
 
+MAME_DIR = os.path.expanduser("~/mame")
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MAME_LOG = os.path.join(SAM2, "mame.log")
+
+
+def launch_mame(windowed: bool = False):
+    """Start MAME from ~/mame (relative rompath) with lua/sam2.lua. Returns the Popen."""
+    import subprocess
+    os.makedirs(SAM2, exist_ok=True)
+    video = ["-window", "-nomaximize"] if windowed else ["-video", "none"]
+    cmd = ["mame", "samsho2", *video, "-sound", "none", "-skip_gameinfo",
+           "-autoboot_script", os.path.join(REPO, "lua", "sam2.lua"), "-autoboot_delay", "3"]
+    log = open(MAME_LOG, "w")
+    p = subprocess.Popen(cmd, cwd=MAME_DIR, stdout=log, stderr=subprocess.STDOUT)
+    with open(os.path.join(SAM2, "mame.pid"), "w") as f:
+        f.write(str(p.pid))
+    return p
+
+
+def stop_mame(p, timeout: float = 6.0) -> str | None:
+    """After the Lua side has been told to exit, wait; then kill this PID only."""
+    if p is None:
+        return None
+    t0 = time.monotonic()
+    while p.poll() is None and time.monotonic() - t0 < timeout:
+        time.sleep(0.2)
+    if p.poll() is None:
+        p.kill(); p.wait(3)
+        return "killed"
+    return "exited"
+
+
 def main(argv: list[str] | None = None) -> int:
     import argparse
     ap = argparse.ArgumentParser(description="samsho2 bridge (dummy decision-maker)")
@@ -326,14 +358,20 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--wait", type=float, default=90.0, help="max seconds to wait for a live match")
     ap.add_argument("--relay", action="store_true", help="serve frames + telemetry on ws://127.0.0.1:8765")
     ap.add_argument("--jev", action="store_true", help="decide with Jev instead of the dummy (needs TYPESAFE_API_KEY)")
+    ap.add_argument("--launch-mame", action="store_true", help="launch MAME (from ~/mame, lua/sam2.lua) and own its lifetime; used by the Tauri app")
+    ap.add_argument("--mame-window", action="store_true", help="with --launch-mame: windowed instead of -video none")
     a = ap.parse_args(argv)
+    mame = None
+    if a.launch_mame:
+        mame = launch_mame(windowed=a.mame_window)
     t0 = time.monotonic()
     while True:
         st = read_state()
         if st and st.get("match_live"):
             break
-        if time.monotonic() - t0 > a.wait:
-            print("no live match"); return 1
+        if time.monotonic() - t0 > a.wait or (mame is not None and mame.poll() is not None):
+            why = f"timeout after {a.wait}s" if time.monotonic() - t0 > a.wait else f"mame exited with {mame.returncode}"
+            print(f"no live match: {why}"); stop_mame(mame); return 1
         time.sleep(0.1)
     import signal
     relay = None
@@ -356,7 +394,10 @@ def main(argv: list[str] | None = None) -> int:
     def _stop(signum, frame):
         bridge.stop_requested = True
     signal.signal(signal.SIGTERM, _stop); signal.signal(signal.SIGINT, _stop)
-    bridge.run(a.seconds)
+    try:
+        bridge.run(a.seconds)
+    finally:
+        stop_mame(mame)
     if hasattr(dm, "close"):
         dm.close()
     if relay:
