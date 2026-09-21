@@ -9,8 +9,10 @@
 --   s:filter("equal", 0x60)          -- current value == v
 --   s:filter("delta", -4)            -- new - old == n
 --   s:filter("between", lo, hi)      -- lo <= current <= hi
+--   s:filter("equal_snap", i)        -- current == value in snapshot i (e.g. landed after a jump)
+--   s:filter("diff_snap", i)         -- current ~= value in snapshot i
 --   s:count()                        -- candidates left
---   s:report(path, limit)            -- write "addr old new" lines (append)
+--   s:report(sink, limit)            -- sink = function(line) or a path (append); "addr v1 v2 ..." per candidate
 --   s:values(addr)                   -- history of one address across snapshots
 --   s:reset()                        -- all addresses are candidates again
 --
@@ -66,7 +68,7 @@ local function keep(self, pred)
   for _, off in ipairs(self.cand) do
     local new = self:value(b.data, off)
     local old = a and self:value(a.data, off) or nil
-    if pred(old, new) then out[#out + 1] = off end
+    if pred(old, new, off) then out[#out + 1] = off end
   end
   local before = #self.cand
   self.cand = out
@@ -82,6 +84,12 @@ function RS:filter(mode, x, y)
   elseif mode == "equal"     then pred = function(o, n) return n == x end
   elseif mode == "delta"     then pred = function(o, n) return o ~= nil and n - o == x end
   elseif mode == "between"   then pred = function(o, n) return n >= x and n <= y end
+  elseif mode == "equal_snap" then                       -- current == value in snapshot #x
+    local ref = assert(self.snaps[x], "no such snapshot").data
+    pred = function(o, n, off) return n == self:value(ref, off) end
+  elseif mode == "diff_snap" then                        -- current ~= value in snapshot #x
+    local ref = assert(self.snaps[x], "no such snapshot").data
+    pred = function(o, n, off) return n ~= self:value(ref, off) end
   else error("unknown filter " .. tostring(mode)) end
   local before, after = keep(self, pred)
   if self.log then self.log(string.format("filter %-9s %s -> %d candidates (from %d)", mode, x and tostring(x) or "", after, before)) end
@@ -94,20 +102,25 @@ function RS:values(off)
   return t
 end
 
-function RS:report(path, limit)
+-- report(sink, limit): sink is a function(line) (e.g. the script's logger)
+-- or a file path opened in append mode. Never pass the path of a file the
+-- caller already holds open: two handles on one file interleave badly.
+function RS:report(sink, limit)
   limit = limit or 50
-  local f = assert(io.open(path, "a"))
+  local out
+  local f
+  if type(sink) == "function" then out = sink else f = assert(io.open(sink, "a")); out = function(l) f:write(l, "\n") end end
   local a, b = self.snaps[#self.snaps - 1], self.snaps[#self.snaps]
-  f:write(string.format("-- %d candidates, width %d, last two snapshots: %s -> %s\n",
-    #self.cand, self.width, a and a.label or "-", b.label))
+  local labels = {}
+  for i, sn in ipairs(self.snaps) do labels[i] = sn.label end
+  out(string.format("-- %d candidates, width %d, snapshots: %s", #self.cand, self.width, table.concat(labels, " ")))
   for i, off in ipairs(self.cand) do
-    if i > limit then f:write(string.format("-- ... %d more\n", #self.cand - limit)); break end
-    local vals = self:values(off)
+    if i > limit then out(string.format("-- ... %d more", #self.cand - limit)); break end
     local hist = {}
-    for j, v in ipairs(vals) do hist[j] = string.format(self.width == 8 and "%02X" or "%04X", v) end
-    f:write(string.format("0x%06X  %s\n", self.base + off, table.concat(hist, " ")))
+    for j, v in ipairs(self:values(off)) do hist[j] = string.format(self.width == 8 and "%02X" or "%04X", v) end
+    out(string.format("0x%06X  %s", self.base + off, table.concat(hist, " ")))
   end
-  f:close()
+  if f then f:close() end
 end
 
 function RS.selftest(log)
