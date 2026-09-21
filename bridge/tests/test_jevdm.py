@@ -63,3 +63,15 @@ class PoolTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EpochTest(unittest.TestCase):
+    def test_replies_from_before_a_control_command_are_discarded_but_counted(self):
+        a = Applier()
+        a.offer(CallResult("p1", 5, 0, dec(5), None, 300, epoch=0))
+        a.bump_epoch()                                                   # pause / reset / stop arrived
+        self.assertFalse(a.offer(CallResult("p1", 6, 0, dec(6), None, 300, epoch=0)))   # issued before: discarded
+        self.assertTrue(a.offer(CallResult("p1", 7, 0, dec(7), None, 300, epoch=1)))    # issued after: applied
+        self.assertEqual((a.applied, a.discarded, a.stale), (2, 1, 0))
+        self.assertEqual(a.input_tokens, 888 * 3)                        # discarded reply still counted
+        self.assertEqual(a.last_applied["p1"], 7)

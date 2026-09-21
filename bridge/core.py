@@ -17,6 +17,10 @@ from typing import Any, Callable, Protocol
 
 SAM2 = "/tmp/sam2"
 STATE_PATH = os.path.join(SAM2, "state.json")
+CONTROL_PATH = os.path.join(SAM2, "control.json")
+CONTROL_TMP = os.path.join(SAM2, "control.tmp")
+CMD_PATH = os.path.join(SAM2, "cmd.json")        # local command input (tests / CLI): {"seq": n, "cmd": "pause"}
+COMMANDS = ("pause", "resume", "reset", "stop")
 ACTION_PATH = os.path.join(SAM2, "action.json")
 ACTION_TMP = os.path.join(SAM2, "action.tmp")
 LOG_PATH = os.path.join(SAM2, "bridge.log")
@@ -146,6 +150,9 @@ class Bridge:
         self.relay = relay
         self.gate = "-"
         self.tele = None          # bridge.telemetry.Telemetry, set by main() for the Jev path
+        self.paused = False
+        self.control_seq = 0
+        self._cmd_seq_seen = 0
         self.last_decision: dict[str, dict[str, Any]] = {}
         self.state_path, self.poll_s = state_path, poll_s
         self.writer = writer or ActionWriter()
@@ -190,7 +197,7 @@ class Bridge:
     def _step_async(self, state: dict[str, Any]) -> list[dict[str, Any]]:
         """Jev path: issue due calls without waiting, apply finished ones (newest wins)."""
         out = []
-        live = self._round_live(state)
+        live = self._round_live(state) and not self.paused
         due = self.ticker.due()          # keep the schedule moving even when gated
         if state["frame"] % 60 == 0:
             self._log(f"state frame={state['frame']} timer={state['timer']} hp={state['p1']['health']}/{state['p2']['health']} "
@@ -208,10 +215,11 @@ class Bridge:
                 self._log(f"error {r.who} state_seq={r.state_seq} rtt_ms={r.rtt_ms:.0f} {r.error}")
                 continue
             d = r.decision
+            discarded = (r.epoch != a.epoch)
             if self.tele:
                 self.tele.record_reply(r.who, d.rtt_ms, d.input_tokens, d.output_tokens, apply, intent=d.intent, probabilities=d.probabilities,
-                                       opponent_recovering=d.opponent_recovering, confidence=d.confidence, state_seq=r.state_seq)
-            mark = "applied" if apply else "stale"
+                                       opponent_recovering=d.opponent_recovering, confidence=d.confidence, state_seq=r.state_seq, discarded=discarded)
+            mark = "applied" if apply else ("discarded" if discarded else "stale")
             if apply:
                 if self._round_live(state):
                     doc = self.writer.write({r.who: d.intent}, self.source)
@@ -224,9 +232,9 @@ class Bridge:
                                              "wall": time.time(), "rtt_ms": d.rtt_ms, "confidence": d.confidence,
                                              "probabilities": d.probabilities, "opponent_recovering": d.opponent_recovering,
                                              "opp_last3": self.history.last("p2" if r.who == "p1" else "p1")}
-            self._log(f"reply {r.who} seq_sent={r.state_seq} last_applied={a.last_applied[r.who]} rtt_ms={d.rtt_ms:.0f} intent={d.intent} "
+            self._log(f"reply {r.who} seq_sent={r.state_seq} epoch={r.epoch} last_applied={a.last_applied[r.who]} rtt_ms={d.rtt_ms:.0f} intent={d.intent} "
                       f"conf={d.confidence:.2f} recovering={d.opponent_recovering:.2f} {mark} in={d.input_tokens} out={d.output_tokens} "
-                      f"totals calls={self.dm.calls} applied={a.applied} stale={a.stale} errors={a.errors}")
+                      f"totals calls={self.dm.calls} applied={a.applied} stale={a.stale} discarded={a.discarded} errors={a.errors}")
         return out
 
     def telemetry(self, state: dict[str, Any]) -> dict[str, Any]:
@@ -237,10 +245,49 @@ class Bridge:
             jv = {"calls": self.dm.calls, "applied": a.applied, "stale": a.stale, "errors": a.errors, "in_flight": self.dm.in_flight(),
                   "input_tokens": a.input_tokens, "output_tokens": a.output_tokens,
                   "rtt_ms_last": r and self.dm.rtts[-1], "rtt_ms_p50": r[len(r) // 2] if r else None}
-        return {"type": "telemetry", "wall": time.time(), "state": state, "source": self.source,
+        return {"type": "telemetry", "wall": time.time(), "state": state, "source": self.source, "paused": self.paused, "control_seq": self.control_seq,
                 "panel": self.tele.snapshot(state) if self.tele else None,
                 "decisions": self.decisions, "last_decision": self.last_decision, "jev": jv,
                 "loop": self.stats.summary(), "relay": self.relay.stats() if self.relay else None}
+
+    # ---- control channel (bead sam-l4r.4)
+    def command(self, cmd: str) -> dict[str, Any]:
+        """pause / resume / reset / stop. Bumps the Jev epoch so in-flight
+        replies are discarded on return (still counted), forwards to Lua via
+        control.json, and adjusts bridge state. Returns what was done."""
+        if cmd not in COMMANDS:
+            return {"ok": False, "error": f"unknown command {cmd!r}"}
+        if cmd in ("pause", "reset", "stop") and hasattr(self.dm, "applier"):
+            self.dm.applier.bump_epoch()
+        if cmd == "pause":
+            self.paused = True
+        elif cmd == "resume":
+            self.paused = False
+        elif cmd == "reset":
+            self.paused = False
+            self.history = ActionHistory()
+            if self.tele:
+                self.tele.reset()
+            self.last_decision = {}
+            self.decisions = 0
+        elif cmd == "stop":
+            self.stop_requested = True
+        self.control_seq += 1
+        with open(CONTROL_TMP, "w") as f:
+            json.dump({"seq": self.control_seq, "cmd": cmd}, f)
+        os.replace(CONTROL_TMP, CONTROL_PATH)
+        self._log(f"control {cmd} control_seq={self.control_seq} epoch={getattr(getattr(self.dm, 'applier', None), 'epoch', None)} in_flight={self.dm.in_flight() if hasattr(self.dm, 'in_flight') else 0}")
+        return {"ok": True, "cmd": cmd, "control_seq": self.control_seq}
+
+    def _poll_cmd_file(self) -> None:
+        try:
+            with open(CMD_PATH) as f:
+                c = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return
+        if isinstance(c, dict) and isinstance(c.get("seq"), int) and c["seq"] > self._cmd_seq_seen:
+            self._cmd_seq_seen = c["seq"]
+            self.command(c.get("cmd", ""))
 
     def run(self, seconds: float) -> None:
         """Run for `seconds`; 0 or less means until stop_requested (SIGTERM)."""
@@ -249,6 +296,10 @@ class Bridge:
         last_seq, last_report = None, time.monotonic()
         while time.monotonic() < t_end and not self.stop_requested:
             t0 = time.perf_counter()
+            self._poll_cmd_file()
+            if self.relay:
+                for cmd in self.relay.drain_commands():
+                    self.command(cmd)
             st = read_state(self.state_path)
             if st is not None and st.get("seq") != last_seq and st.get("match_live"):
                 last_seq = st["seq"]

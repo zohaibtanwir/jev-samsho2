@@ -113,7 +113,7 @@ function C.poll_action(st, frame)
   local applied = {}
   for _, who in ipairs({ "p1", "p2" }) do
     local it = a[who] and a[who].intent
-    if it and C.INTENTS[it] then applied[who] = it; C.ex[who]:set_intent(it, a.source or "-", frame) end
+    if it and C.INTENTS[it] then applied[who] = it; C.ex[who]:set_intent(it, a.source or "-", frame, a.seq) end
   end
   C.action_log[#C.action_log + 1] = { seq = a.seq, frame = frame, p1 = applied.p1, p2 = applied.p2, source = a.source }
   if #C.action_log > 50 then table.remove(C.action_log, 1) end
@@ -126,12 +126,65 @@ local function step_exec(st)
   C.ex.p2:tick(st.frame, st.p2, st.p1)
 end
 
+-- ---- control.json: pause / resume / reset / stop from the bridge (bead sam-l4r.4)
+-- {"seq": n, "cmd": "pause"|"resume"|"reset"|"stop"}. Pause is a real
+-- emulator pause (emu.pause(), verified in lua/pause_probe.lua: frames stop,
+-- machine.paused = true). While paused the frame notifier does not run, so
+-- the file is also polled from a coroutine on emu.wait_next_update(), which
+-- keeps running at UI rate during a pause. reset reloads the state saved at
+-- MATCH_LIVE_AT (round 1, full health) and clears executors and trackers.
+C.CONTROL_PATH = "/tmp/sam2/control.json"
+C.MATCH_STATE = "/tmp/sam2/match_start.sta"
+C.paused = false
+C.control_seq = 0
+C.control_log = {}
+local function apply_control(cmd, frame)
+  if cmd == "pause" then
+    C.ex.p1:set_intent("none", "control", frame); C.ex.p2:set_intent("none", "control", frame)
+    C.ex.p1:release_all(); C.ex.p2:release_all()
+    emu.pause(); C.paused = true
+  elseif cmd == "resume" then
+    emu.unpause(); C.paused = false
+  elseif cmd == "reset" then
+    C.ex.p1:set_intent("none", "control", frame); C.ex.p2:set_intent("none", "control", frame)
+    C.ex.p1:release_all(); C.ex.p2:release_all()
+    tr1, tr2 = MV.new_tracker(C.P1_NAME), MV.new_tracker(C.P2_NAME)
+    manager.machine:load(C.MATCH_STATE)
+    if C.paused then emu.unpause(); C.paused = false end
+  elseif cmd == "stop" then
+    C.ex.p1:release_all(); C.ex.p2:release_all()
+    manager.machine:exit()
+  end
+  SM.say("frame %d  control %s applied", frame, cmd)
+  C.control_log[#C.control_log + 1] = { cmd = cmd, frame = frame }
+end
+function C.poll_control(frame)
+  local f = io.open(C.CONTROL_PATH, "r"); if not f then return end
+  local txt = f:read("a"); f:close()
+  local ok, c = pcall(C.decode, txt)
+  if not ok or type(c) ~= "table" or type(c.seq) ~= "number" or c.seq <= C.control_seq then return end
+  C.control_seq = c.seq
+  apply_control(c.cmd, frame)
+end
+local last_frame_seen = 0
+function C.start_control_coroutine()
+  CONTROL_CO = coroutine.create(function()
+    while true do
+      emu.wait_next_update()
+      if C.paused then C.poll_control(last_frame_seen) end
+    end
+  end)
+  coroutine.resume(CONTROL_CO)
+end
+
 local space, tr1, tr2, seq
 function C.init()
   SM.open_log()
   SM.say("sam2core: json via %s", C.json_source)
   tr1, tr2 = MV.new_tracker(C.P1_NAME), MV.new_tracker(C.P2_NAME)
   seq = 0
+  os.remove(C.CONTROL_PATH)
+  C.start_control_coroutine()
 end
 
 local function fighter(name, p, tr)
@@ -164,6 +217,7 @@ function C.read_state(frame)
     match_live = frame >= SM.MATCH_LIVE_AT,
     p1 = p1, p2 = p2, gap = math.abs(p2.x - p1.x),
     action_seq = last_action_seq, last_action = last and { seq = last.seq, frame = last.frame, p1 = last.p1, p2 = last.p2 } or nil,
+    control_seq = C.control_seq, paused = C.paused, last_control = C.control_log[#C.control_log],
   }
 end
 
@@ -211,7 +265,10 @@ end
 -- Per-frame entry. Returns the state table once the match is live, else nil.
 function C.tick(frame)
   SM.tick(frame)
+  last_frame_seen = frame
+  if frame == SM.MATCH_LIVE_AT then manager.machine:save(C.MATCH_STATE); SM.say("frame %d  match-start state saved to %s", frame, C.MATCH_STATE) end
   if frame < SM.MATCH_LIVE_AT then return nil end
+  C.poll_control(frame)
   local st = C.read_state(frame)
   C.write_state(st)
   step_exec(st)

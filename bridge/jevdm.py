@@ -29,6 +29,7 @@ class CallResult:
     decision: jev.Decision | None
     error: str | None
     rtt_ms: float
+    epoch: int = 0
 
 
 @dataclass
@@ -38,16 +39,26 @@ class Applier:
     applied: int = 0
     stale: int = 0
     errors: int = 0
+    discarded: int = 0          # in flight when pause / reset / stop arrived (PRD section 6)
+    epoch: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
+
+    def bump_epoch(self) -> None:
+        """Pause, reset or stop: anything issued before this moment must never press buttons."""
+        self.epoch += 1
+        self.last_applied = {w: 0 for w in FIGHTERS}
 
     def offer(self, r: CallResult) -> bool:
         """Account for a result; True if it should be applied."""
         if r.decision is None:
             self.errors += 1
             return False
-        self.input_tokens += r.decision.input_tokens
+        self.input_tokens += r.decision.input_tokens     # discarded and stale replies still cost tokens
         self.output_tokens += r.decision.output_tokens
+        if r.epoch != self.epoch:
+            self.discarded += 1
+            return False
         if r.state_seq <= self.last_applied[r.who]:
             self.stale += 1
             return False
@@ -70,10 +81,10 @@ class JevPool:
         for t in self.threads:
             t.start()
 
-    def issue(self, state: dict[str, Any], opponent_history: list[str]) -> None:
+    def issue(self, state: dict[str, Any], opponent_history: list[str], epoch: int = 0) -> None:
         with self._lock:
             self.in_flight += 1
-        self.jobs.put((state, state["seq"], list(opponent_history), time.monotonic()))
+        self.jobs.put((state, state["seq"], list(opponent_history), time.monotonic(), epoch))
 
     def close(self) -> None:
         for _ in self.threads:
@@ -84,14 +95,14 @@ class JevPool:
             job = self.jobs.get()
             if job is None:
                 break
-            state, seq, hist, issued = job
+            state, seq, hist, issued, epoch = job
             req = jev.build_request(state, self.who, hist, model=self.model)
             t0 = time.perf_counter()
             try:
                 d = client.call(req, who=self.who, state_seq=seq)
-                res = CallResult(self.who, seq, issued, d, None, d.rtt_ms)
+                res = CallResult(self.who, seq, issued, d, None, d.rtt_ms, epoch)
             except jev.JevError as e:
-                res = CallResult(self.who, seq, issued, None, str(e), (time.perf_counter() - t0) * 1000)
+                res = CallResult(self.who, seq, issued, None, str(e), (time.perf_counter() - t0) * 1000, epoch)
             with self._lock:
                 self.in_flight -= 1
             self.results.put(res)
@@ -117,7 +128,7 @@ class JevDecisionMaker:
 
     def tick(self, state: dict[str, Any], who: str, opponent_history: list[str]) -> None:
         self.calls += 1
-        self.pools[who].issue(state, opponent_history)
+        self.pools[who].issue(state, opponent_history, self.applier.epoch)
 
     def drain(self):
         while True:

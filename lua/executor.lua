@@ -52,7 +52,7 @@ function EX:_set(names, source, frame)
     self.presses = self.presses + 1
     local k = (source == "jev" or source == "reflex" or source == "test") and source or "other"
     self.counts[k] = self.counts[k] + 1
-    if self.log then self.log(string.format("%d %s %s %s %s", frame, self.who, table.concat(names, "+"), source or "-", self.intent or "-")) end
+    if self.log then self.log(string.format("%d %s %s %s %s %d", frame, self.who, table.concat(names, "+"), source or "-", self.intent or "-", self.action_seq or 0)) end
   end
 end
 
@@ -63,8 +63,8 @@ local function can_act(me)
   return ph == "idle" or ph == "walk_fwd" or ph == "walk_back" or ph == "crouch"
 end
 
-function EX:set_intent(intent, source, frame)
-  self.intent, self.source, self.intent_frame = intent, source or "-", frame
+function EX:set_intent(intent, source, frame, action_seq)
+  self.intent, self.source, self.intent_frame, self.action_seq = intent, source or "-", frame, action_seq or 0
   local heavy = self.moves and self.moves.heavy and self.moves.heavy.fields or { "A", "B" }
   local hb = {}
   for i, f in ipairs(heavy) do hb[i] = f:gsub("^P%d ", "") end

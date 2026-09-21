@@ -27,7 +27,7 @@ def _p50(xs: list[float]) -> float | None:
 class FighterStats:
     def __init__(self, char: str):
         self.char = char
-        self.calls = self.applied = self.stale = self.errors = 0
+        self.calls = self.applied = self.stale = self.errors = self.discarded = 0
         self.input_tokens = self.output_tokens = 0
         self.rtts: list[float] = []
         self.last_rtt: float | None = None
@@ -51,8 +51,10 @@ class Telemetry:
     def record_reply(self, who: str, rtt_ms: float, input_tokens: int, output_tokens: int, applied: bool,
                      intent: str | None = None, probabilities: dict[str, float] | None = None,
                      opponent_recovering: float | None = None, confidence: float | None = None,
-                     state_seq: int | None = None, now: float | None = None) -> None:
+                     state_seq: int | None = None, now: float | None = None, discarded: bool = False) -> None:
         s = self.f[who]
+        if discarded:
+            s.discarded += 1
         s.rtts.append(rtt_ms); s.last_rtt = rtt_ms
         if len(s.rtts) > 3000:
             del s.rtts[:1000]
@@ -94,7 +96,7 @@ class Telemetry:
                 "response_ms_last": s.last_rtt, "response_ms_p50": p50,
                 "decision_ms_last_estimated": self._est(s.last_rtt), "decision_ms_p50_estimated": self._est(p50),
                 "network_baseline_ms": self.network_baseline_ms, "estimated_note": "decision time = round trip - network baseline; the API returns no timing field",
-                "calls": s.calls, "stale_discarded": s.stale, "errors": s.errors, "applied": s.applied,
+                "calls": s.calls, "stale_discarded": s.stale, "discarded_on_control": s.discarded, "errors": s.errors, "applied": s.applied,
             },
             "usage": {"input_tokens": s.input_tokens, "output_tokens": s.output_tokens, "cost_usd": round(s.cost_usd(), 6)},
             "health": state_fighter.get("health"), "rage": state_fighter.get("rage"),
@@ -104,7 +106,7 @@ class Telemetry:
         now = now or time.time()
         presses = state.get("presses") or {}
         fighters = {w: self.fighter(w, state[w], presses.get(w), now) for w in FIGHTERS}
-        tot = {k: sum(self.f[w].__dict__[k] for w in FIGHTERS) for k in ("calls", "applied", "stale", "errors", "input_tokens", "output_tokens")}
+        tot = {k: sum(self.f[w].__dict__[k] for w in FIGHTERS) for k in ("calls", "applied", "stale", "discarded", "errors", "input_tokens", "output_tokens")}
         tot["cost_usd"] = round(sum(self.f[w].cost_usd() for w in FIGHTERS), 6)
         return {
             "match": {"timer": state.get("timer"), "p1_health": state["p1"]["health"], "p2_health": state["p2"]["health"],

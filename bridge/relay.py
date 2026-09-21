@@ -55,6 +55,8 @@ class Relay:
         self.last_seq = -1
         self.encode_ms: list[float] = []
         self._thread: threading.Thread | None = None
+        self.commands: "list[str]" = []          # text messages {"cmd": ...} from clients
+        self._cmd_lock = threading.Lock()
         self._stop = threading.Event()
         self.ready = threading.Event()
 
@@ -82,10 +84,22 @@ class Relay:
     async def _handler(self, ws) -> None:
         self.clients.add(ws)
         try:
-            async for _ in ws:      # clients send nothing we act on
-                pass
+            async for msg in ws:      # control commands: {"cmd": "pause"|"resume"|"reset"|"stop"}
+                if isinstance(msg, str):
+                    try:
+                        cmd = json.loads(msg).get("cmd")
+                    except (json.JSONDecodeError, AttributeError):
+                        continue
+                    if cmd:
+                        with self._cmd_lock:
+                            self.commands.append(cmd)
         finally:
             self.clients.discard(ws)
+
+    def drain_commands(self) -> list[str]:
+        with self._cmd_lock:
+            out, self.commands = self.commands, []
+        return out
 
     # ---- broadcast
     async def _broadcast(self, msg) -> None:
