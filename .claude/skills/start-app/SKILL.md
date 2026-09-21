@@ -27,11 +27,11 @@ Stage 1 (MAME + a probe script) is over; use `/run-lua` for one-off scripts. Whe
 
    **Bridge** — from the project folder; it waits for the match to go live (~30 s), then runs until stopped. It inherits `TYPESAFE_API_KEY` from the environment; never pass or print it.
    ```bash
-   cd /Users/zohaibtanwir/projects/jev-samsho2 && nohup python3 -m bridge.core --seconds 0 \
+   cd /Users/zohaibtanwir/projects/jev-samsho2 && nohup python3 -m bridge.core --seconds 0 --jev --relay \
      > /tmp/sam2/bridge.out 2>&1 &
    echo "$! bridge" >> /tmp/sam2/pids
    ```
-   (Until Jev is wired in — bead sam-l4r.2 — `bridge.core` runs the dummy decision-maker.)
+   `--jev` decides with Jev (drop it for the dummy decision-maker); `--relay` serves frames + telemetry on ws://127.0.0.1:8765 for `tools/view.html` (serve that page with `python3 -m http.server 8090` from `tools/` if you want to watch in a browser; record that PID too).
 
 4. Wait 2 s, then for each line in `/tmp/sam2/pids` run `kill -0 <pid>` and report `alive`/`dead` per label with its PID. If any is dead, print the last 20 lines of its log (`/tmp/sam2/mame.log`, `/tmp/sam2/bridge.out`).
 
