@@ -10,7 +10,7 @@ def main():
     raw_p = sys.argv[1] if len(sys.argv) > 1 else "/tmp/sam2/frame.raw"
     meta_p = sys.argv[2] if len(sys.argv) > 2 else "/tmp/sam2/frame.meta"
     out_p = sys.argv[3] if len(sys.argv) > 3 else "/tmp/sam2/frame.png"
-    w, h, n = (int(x) for x in open(meta_p).read().split())
+    w, h, n = (int(x) for x in open(meta_p).read().split()[:3])
     raw = open(raw_p, "rb").read()
     assert len(raw) == n == w * h * 4, (len(raw), n, w, h)
     # host-endian 32-bit: on Apple silicon little-endian, so bytes are B,G,R,A for an 0xAARRGGBB value

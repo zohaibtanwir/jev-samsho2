@@ -190,6 +190,40 @@ function C.write_state(st)
   return os.rename(C.TMP_PATH, C.STATE_PATH)
 end
 
+-- ---- frame writer (bead sam-7ij.3) -----------------------------------------
+-- Every FRAME_EVERY-th frame: screen:pixels() -> frame.tmp -> rename to
+-- frame.raw, then frame.meta ("w h bytes frame seq wallclock") the same way.
+-- C.FRAMES = false turns it off (used by the speed comparison in sam-e8s.5).
+C.FRAMES = true
+C.FRAME_EVERY = 2
+C.FRAME_PATH, C.FRAME_TMP = "/tmp/sam2/frame.raw", "/tmp/sam2/frame.tmp"
+C.META_PATH, C.META_TMP = "/tmp/sam2/frame.meta", "/tmp/sam2/frame.meta.tmp"
+local frame_seq = 0
+local screen
+function C.write_frame(frame)
+  screen = screen or manager.machine.screens[":screen"]
+  local px, w, h = screen:pixels()
+  local f = io.open(C.FRAME_TMP, "wb"); if not f then return false end
+  f:write(px); f:close()
+  if not os.rename(C.FRAME_TMP, C.FRAME_PATH) then return false end
+  frame_seq = frame_seq + 1
+  local m = io.open(C.META_TMP, "w"); if not m then return false end
+  m:write(string.format("%d %d %d %d %d %.3f\n", w, h, #px, frame, frame_seq, os.time() + (os.clock() % 1))); m:close()
+  return os.rename(C.META_TMP, C.META_PATH)
+end
+
+-- ---- speed log ---------------------------------------------------------------
+-- Once a second: "frame speed" where speed = video.speed_percent * 100. Despite
+-- the name, speed_percent read 1.0 at full speed on MAME 0.289 (a ratio);
+-- the raw value is logged in the third column.
+C.SPEED_PATH = nil   -- set a path to enable
+local speed_f
+function C.log_speed(frame)
+  if not C.SPEED_PATH then return end
+  speed_f = speed_f or io.open(C.SPEED_PATH, "w")
+  if speed_f then local r = manager.machine.video.speed_percent; speed_f:write(string.format("%d %.1f %.4f\n", frame, r * 100, r)); speed_f:flush() end
+end
+
 -- Per-frame entry. Returns the state table once the match is live, else nil.
 function C.tick(frame)
   SM.tick(frame)
@@ -198,6 +232,8 @@ function C.tick(frame)
   C.write_state(st)
   step_exec("p1"); step_exec("p2")
   C.poll_action(st, frame)
+  if C.FRAMES and frame % C.FRAME_EVERY == 0 then C.write_frame(frame) end
+  if frame % 60 == 0 then C.log_speed(frame) end
   return st
 end
 
