@@ -16,12 +16,12 @@ Runs `$0` against `samsho2`. Delay is `$1`, default 3 seconds. Use this for one-
 3. Same guard as `start-app`: if any PID in `/tmp/sam2/pids` is alive (`kill -0`), refuse and tell me to run `/stop-app`.
 4. Launch from `~/mame`, windowed:
    ```bash
-   cd ~/mame && nohup mame samsho2 -window -nomaximize \
+   cd ~/mame && nohup mame samsho2 -window -nomaximize -skip_gameinfo -sound none \
      -autoboot_script <abs-script> -autoboot_delay <delay> \
      > /tmp/sam2/mame.log 2>&1 &
    echo "$! mame" >> /tmp/sam2/pids
    ```
-   Add extra MAME flags only when the task names them (e.g. `-video none` for the headless frame-grab check).
+   `-skip_gameinfo` is mandatory (otherwise MAME waits on a "press any button" info screen); `-sound none` stays until told otherwise. Add other MAME flags only when the task names them (e.g. `-video none` for the headless frame-grab check).
 5. Wait 2 s, `kill -0` the PID, report `alive`/`dead` with the PID. If dead, print the last 20 lines of `/tmp/sam2/mame.log`.
 6. Report where output is:
    - MAME stdout/stderr, including Lua `print()`: `/tmp/sam2/mame.log`

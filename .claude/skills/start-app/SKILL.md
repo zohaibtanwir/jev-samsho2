@@ -18,12 +18,12 @@ When the build moves to Stage 2 (bridge + MAME, PRD §13 steps 5–7) or Stage 3
 
    **Stage 1 launch.** Always from `~/mame` (the rompath in `mame.ini` is relative). The script is `$0` if given, otherwise the project's current main Lua script; if no script is given and none exists in the repo yet, say so and stop. Delay is `$1`, default 3.
    ```bash
-   cd ~/mame && nohup mame samsho2 -window -nomaximize \
+   cd ~/mame && nohup mame samsho2 -window -nomaximize -skip_gameinfo -sound none \
      -autoboot_script <abs-path-to-script> -autoboot_delay <delay> \
      > /tmp/sam2/mame.log 2>&1 &
    echo "$! mame" >> /tmp/sam2/pids
    ```
-   Use `-video none -sound none` instead of `-window -nomaximize` only when the task explicitly needs headless MAME (PRD §5, §12 frame-grab check).
+   `-skip_gameinfo` is mandatory: without it MAME waits on a "press any button" info screen and nothing is hands-free. `-sound none` stays until told otherwise. Use `-video none` instead of `-window -nomaximize` only when the task explicitly needs headless MAME (PRD §5, §12 frame-grab check).
 
    Stage 2 (not yet): also start the Python bridge from the project folder, log to `/tmp/sam2/bridge.log`, record `<pid> bridge`.
    Stage 3 (not yet): start the Tauri app; it owns bridge + MAME itself. Record `<pid> tauri`.
