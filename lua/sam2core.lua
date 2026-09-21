@@ -83,40 +83,27 @@ local function decode(s)
 end
 C.decode = (ok_json and json.parse) or decode
 
--- ---- action.json: intents from the bridge (bead sam-e8s.1) -----------------
--- {"seq": n, "p1": {"intent": "advance|retreat|attack|block|bait"}, "p2": {...}}
--- Applied when seq is newer than the last one consumed. Minimal expansion
--- (the proper executor is Epic 7): each intent holds inputs for
--- ACTION_FRAMES frames; direction is chosen from the two X positions.
+-- ---- action.json: intents from the bridge (beads sam-e8s.1, sam-amj.1) ---
+-- {"seq": n, "source": "jev", "p1": {"intent": "advance|retreat|attack|block|bait"}, "p2": {...}}
+-- Applied when seq is newer than the last one consumed; expansion into
+-- presses is done by lua/executor.lua, which logs every press to
+-- /tmp/sam2/presses.log ("frame who buttons source intent").
+local EX = dofile(here .. "executor.lua")
 C.ACTION_PATH = "/tmp/sam2/action.json"
-C.ACTION_FRAMES = 20
-C.INTENTS = { advance = true, retreat = true, attack = true, block = true, bait = true }
+C.PRESS_LOG = "/tmp/sam2/presses.log"
+C.INTENTS = { advance = true, retreat = true, attack = true, block = true, bait = true, none = true }  -- none: release everything (tests, pause)
 C.SNAP_ON_ACTION = false
 local last_action_seq = 0
-local exec = { p1 = { held = {}, left = 0, queue = {} }, p2 = { held = {}, left = 0, queue = {} } }
-local PORT = { p1 = ":edge:joy:JOY1", p2 = ":edge:joy:JOY2" }
-local PFX = { p1 = "P1 ", p2 = "P2 " }
-local function fld(who, name) return manager.machine.ioport.ports[PORT[who]].fields[PFX[who] .. name] end
-local function release_all(who) for n in pairs(exec[who].held) do fld(who, n):clear_value() end; exec[who].held = {} end
-local function hold(who, names, frames)
-  release_all(who)
-  for _, n in ipairs(names) do fld(who, n):set_value(1); exec[who].held[n] = true end
-  exec[who].left = frames
+local press_f
+local function press_log(line)
+  press_f = press_f or io.open(C.PRESS_LOG, "a")
+  if press_f then press_f:write(line, "\n"); press_f:flush() end
 end
+C.ex = {
+  p1 = EX.new{ who = "p1", port = ":edge:joy:JOY1", prefix = "P1 ", character = C.P1_NAME, log = press_log },
+  p2 = EX.new{ who = "p2", port = ":edge:joy:JOY2", prefix = "P2 ", character = C.P2_NAME, log = press_log },
+}
 C.action_log = {}   -- last few applied actions, for the check scripts
-local function apply_intent(who, intent, st)
-  local me, other = st[who], st[who == "p1" and "p2" or "p1"]
-  local toward = (other.x >= me.x) and "Right" or "Left"
-  local away = (toward == "Right") and "Left" or "Right"
-  local e = exec[who]; e.queue = {}
-  if intent == "advance" then hold(who, { toward }, C.ACTION_FRAMES)
-  elseif intent == "retreat" then hold(who, { away }, C.ACTION_FRAMES)
-  elseif intent == "block" then hold(who, { away }, C.ACTION_FRAMES)
-  elseif intent == "attack" then hold(who, { "A", "B" }, 4)
-  elseif intent == "bait" then hold(who, { "A" }, 4); e.queue = { { names = { away }, frames = C.ACTION_FRAMES - 4 } }
-  else return false end
-  return true
-end
 function C.poll_action(st, frame)
   local f = io.open(C.ACTION_PATH, "r"); if not f then return nil end
   local txt = f:read("a"); f:close()
@@ -126,24 +113,17 @@ function C.poll_action(st, frame)
   local applied = {}
   for _, who in ipairs({ "p1", "p2" }) do
     local it = a[who] and a[who].intent
-    if it and C.INTENTS[it] then applied[who] = it; apply_intent(who, it, st) end
+    if it and C.INTENTS[it] then applied[who] = it; C.ex[who]:set_intent(it, a.source or "-", frame) end
   end
   C.action_log[#C.action_log + 1] = { seq = a.seq, frame = frame, p1 = applied.p1, p2 = applied.p2, source = a.source }
   if #C.action_log > 50 then table.remove(C.action_log, 1) end
-  SM.say("frame %d  action seq %d  p1=%s p2=%s", frame, a.seq, tostring(applied.p1), tostring(applied.p2))
+  SM.say("frame %d  action seq %d  p1=%s p2=%s src=%s", frame, a.seq, tostring(applied.p1), tostring(applied.p2), tostring(a.source))
   if C.SNAP_ON_ACTION then pcall(function() manager.machine.video:snapshot() end) end
   return a
 end
-local function step_exec(who)
-  local e = exec[who]
-  if e.left > 0 then
-    e.left = e.left - 1
-    if e.left == 0 then
-      release_all(who)
-      local nxt = table.remove(e.queue, 1)
-      if nxt then hold(who, nxt.names, nxt.frames) end
-    end
-  end
+local function step_exec(st)
+  C.ex.p1:tick(st.frame, st.p1, st.p2)
+  C.ex.p2:tick(st.frame, st.p2, st.p1)
 end
 
 local space, tr1, tr2, seq
@@ -154,7 +134,7 @@ function C.init()
   seq = 0
 end
 
-local function fighter(name, p, tr, other)
+local function fighter(name, p, tr)
   local r = MM.read_player(space, p)          -- follows the per-round object pointer
   local d = tr:update(r.state)
   return {
@@ -173,7 +153,12 @@ function C.read_state(frame)
   local p2 = fighter(C.P2_NAME, MM.p2, tr2)
   seq = seq + 1
   local last = C.action_log[#C.action_log]
+  local presses = {}
+  for _, who in ipairs({ "p1", "p2" }) do
+    local e = C.ex[who]; presses[who] = { total = e.presses, jev = e.counts.jev, reflex = e.counts.reflex, test = e.counts.test, held = (function() local h = {} for n in pairs(e.held) do h[#h + 1] = n end table.sort(h) return h end)(), intent = e.intent }
+  end
   return {
+    presses = presses,
     seq = seq, frame = frame, timer = MM.read_timer(space),
     match_live = frame >= SM.MATCH_LIVE_AT,
     p1 = p1, p2 = p2, gap = math.abs(p2.x - p1.x),
@@ -228,7 +213,7 @@ function C.tick(frame)
   if frame < SM.MATCH_LIVE_AT then return nil end
   local st = C.read_state(frame)
   C.write_state(st)
-  step_exec("p1"); step_exec("p2")
+  step_exec(st)
   C.poll_action(st, frame)
   if C.FRAMES and frame % C.FRAME_EVERY == 0 then C.write_frame(frame) end
   if frame % 60 == 0 then C.log_speed(frame) end

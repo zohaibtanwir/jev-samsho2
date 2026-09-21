@@ -36,8 +36,9 @@ renames it over `<name>.json`, so a reader never sees a half-written file
 
 - `seq` must increase; Lua applies a file once, when `seq` is newer than the
   last one it consumed. Stale or unchanged files are ignored.
-- `intent` per fighter is one of `advance retreat attack block bait`. A
-  fighter key may be omitted to leave that fighter alone.
+- `intent` per fighter is one of `advance retreat attack block bait`, plus
+  `none` (release all inputs; used by tests and Pause). A fighter key may be
+  omitted to leave that fighter alone.
 - `source` is free text carried through to `state.json.last_action` and the
   press log (`jev`, `reflex`, `test`, ...).
 - The bridge sends intent only; all button expansion happens in Lua
