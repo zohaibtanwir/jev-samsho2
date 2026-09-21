@@ -16,6 +16,8 @@ export default function App() {
   const sock = useRef<BridgeSocket | null>(null);
   const frame = useFrameSink();
   const inTauri = "__TAURI_INTERNALS__" in window;
+  // after a UI reload, re-adopt a sidecar that is already running (else Start/Stop get out of step)
+  useEffect(() => { if (!inTauri) return; bridgeStatus().then((s) => { if (s.running) setPhase("booting"); }).catch(() => {}); }, [inTauri]);
 
   const latest = useRef<Telemetry | null>(null);
   useEffect(() => {
