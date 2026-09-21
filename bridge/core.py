@@ -145,6 +145,7 @@ class Bridge:
         self.dm, self.source = decision_maker, source
         self.relay = relay
         self.gate = "-"
+        self.tele = None          # bridge.telemetry.Telemetry, set by main() for the Jev path
         self.last_decision: dict[str, dict[str, Any]] = {}
         self.state_path, self.poll_s = state_path, poll_s
         self.writer = writer or ActionWriter()
@@ -198,13 +199,18 @@ class Bridge:
             for who in due:
                 other = "p2" if who == "p1" else "p1"
                 self.dm.tick(state, who, self.history.last(other))
+                if self.tele: self.tele.record_call(who)
                 self._log(f"call {who} state_seq={state['seq']} frame={state['frame']} hp={state[who]['health']} in_flight={self.dm.in_flight()}")
         for r, apply in self.dm.drain():
             a = self.dm.applier
             if r.decision is None:
+                if self.tele: self.tele.record_error(r.who)
                 self._log(f"error {r.who} state_seq={r.state_seq} rtt_ms={r.rtt_ms:.0f} {r.error}")
                 continue
             d = r.decision
+            if self.tele:
+                self.tele.record_reply(r.who, d.rtt_ms, d.input_tokens, d.output_tokens, apply, intent=d.intent, probabilities=d.probabilities,
+                                       opponent_recovering=d.opponent_recovering, confidence=d.confidence, state_seq=r.state_seq)
             mark = "applied" if apply else "stale"
             if apply:
                 if self._round_live(state):
@@ -232,6 +238,7 @@ class Bridge:
                   "input_tokens": a.input_tokens, "output_tokens": a.output_tokens,
                   "rtt_ms_last": r and self.dm.rtts[-1], "rtt_ms_p50": r[len(r) // 2] if r else None}
         return {"type": "telemetry", "wall": time.time(), "state": state, "source": self.source,
+                "panel": self.tele.snapshot(state) if self.tele else None,
                 "decisions": self.decisions, "last_decision": self.last_decision, "jev": jv,
                 "loop": self.stats.summary(), "relay": self.relay.stats() if self.relay else None}
 
@@ -282,12 +289,19 @@ def main(argv: list[str] | None = None) -> int:
     if a.relay:
         from bridge.relay import Relay
         relay = Relay(); relay.start()
+    from bridge.telemetry import Telemetry
+    baseline = None
     if a.jev:
         from bridge.jevdm import JevDecisionMaker
+        from bridge import jev as jevmod
+        rtts = jevmod.measure_rtt(rounds=5)
+        baseline = statistics.median(rtts) if rtts else None
         dm, source = JevDecisionMaker(), "jev"
     else:
         dm, source = DummyDecisionMaker(), "dummy"
     bridge = Bridge(dm, source=source, relay=relay)
+    bridge.tele = Telemetry({"p1": "Earthquake", "p2": "Nakoruru"}, baseline)
+    bridge._log(f"network baseline (median TCP connect) = {baseline} ms")
     def _stop(signum, frame):
         bridge.stop_requested = True
     signal.signal(signal.SIGTERM, _stop); signal.signal(signal.SIGINT, _stop)

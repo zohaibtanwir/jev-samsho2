@@ -17,7 +17,7 @@ function connect(){
   ws.onclose=()=>{document.getElementById('ws').textContent='closed, retrying';setTimeout(connect,1000)};
   ws.onmessage=async e=>{
     if(typeof e.data==='string'){tn++;document.getElementById('tn').textContent=tn;
-      document.getElementById('t').textContent=JSON.stringify(JSON.parse(e.data),null,1);return}
+      const j=JSON.parse(e.data);document.getElementById('t').textContent=JSON.stringify({panel:j.panel,jev:j.jev,loop:j.loop,relay:j.relay,state:j.state},null,1);return}
     const bmp=await createImageBitmap(e.data); ctx.drawImage(bmp,0,0); bmp.close();
     n++;const now=performance.now();times.push(now);while(times.length&&times[0]<now-1000)times.shift();
     document.getElementById('n').textContent=n;document.getElementById('fps').textContent=times.length;

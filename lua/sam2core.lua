@@ -160,6 +160,7 @@ function C.read_state(frame)
   return {
     presses = presses,
     seq = seq, frame = frame, timer = MM.read_timer(space),
+    speed_percent = manager.machine.video.speed_percent * 100,
     match_live = frame >= SM.MATCH_LIVE_AT,
     p1 = p1, p2 = p2, gap = math.abs(p2.x - p1.x),
     action_seq = last_action_seq, last_action = last and { seq = last.seq, frame = last.frame, p1 = last.p1, p2 = last.p2 } or nil,
