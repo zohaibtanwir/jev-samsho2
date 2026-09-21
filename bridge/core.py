@@ -346,7 +346,9 @@ def launch_mame(windowed: bool = False):
     """Start MAME from ~/mame (relative rompath) with lua/sam2.lua. Returns the Popen."""
     import subprocess
     os.makedirs(SAM2, exist_ok=True)
-    video = ["-window", "-nomaximize"] if windowed else ["-video", "none"]
+    # -video none still creates MAME's SDL window, and mame.ini has window=0 (fullscreen):
+    # that was a full-screen black window. Always windowed + no maximize -> a 320x272 window.
+    video = ["-window", "-nomaximize"] if windowed else ["-video", "none", "-window", "-nomaximize"]
     cmd = ["mame", "samsho2", *video, "-sound", "none", "-skip_gameinfo",
            "-autoboot_script", os.path.join(REPO, "lua", "sam2.lua"), "-autoboot_delay", "3"]
     log = open(MAME_LOG, "w")

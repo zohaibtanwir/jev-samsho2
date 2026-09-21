@@ -20,7 +20,16 @@ def osa(cmd):
     r = subprocess.run(["osascript", "-e", f'tell application "System Events" to tell process "app" to {cmd}'], capture_output=True, text=True)
     return (r.stdout or r.stderr).strip()
 
-def click(name): return osa(f'click button "{name}" {B}')
+def click(name, expect_control=None, tries=6):
+    """Raise the window, click; if `expect_control` is given, retry until bridge.log shows that control line."""
+    before = open("/tmp/sam2/bridge.log").read().count(f" control {expect_control} ") if expect_control else 0
+    for _ in range(tries):
+        osa("set frontmost to true"); osa('perform action "AXRaise" of window 1'); time.sleep(0.6)
+        r = osa(f'click button "{name}" {B}')
+        if not expect_control: return r
+        time.sleep(1.2)
+        if open("/tmp/sam2/bridge.log").read().count(f" control {expect_control} ") > before: return r
+    return "click NOT confirmed"
 def view_fps():
     v = osa('get value of every static text of group 1 of group "game view" of UI element 1 of scroll area 1 of group 1 of group 1 of window 1')
     try: return int(v.split(",")[1].strip())
@@ -90,14 +99,14 @@ def main():
     out.append(f"Start -> running: {'yes' if ok else 'NO'} in {time.time()-t_start:.1f} s; buttons {buttons()}")
     out.append(run_match("match 1", MatchTracker()))
     # Pause / Resume once
-    t1 = (latest.get("state") or {}).get("timer"); click("Pause"); time.sleep(4); t2 = (latest.get("state") or {}).get("timer"); ph = latest.get("phase")
-    click("Resume"); time.sleep(3); t3 = (latest.get("state") or {}).get("timer")
+    t1 = (latest.get("state") or {}).get("timer"); click("Pause", "pause"); time.sleep(4); t2 = (latest.get("state") or {}).get("timer"); ph = latest.get("phase")
+    click("Resume", "resume"); time.sleep(3); t3 = (latest.get("state") or {}).get("timer")
     out.append(f"Pause: timer {t1} -> {t2} after 4 s (phase {ph}); Resume: timer {t3} 3 s later")
     # Reset once
-    click("Reset"); time.sleep(1.5); st = latest.get("state") or {}; pr = st.get("presses") or {}; p = latest.get("panel") or {}
+    click("Reset", "reset"); time.sleep(1.5); st = latest.get("state") or {}; pr = st.get("presses") or {}; p = latest.get("panel") or {}
     out.append(f"Reset: timer {st.get('timer')} hp {st.get('p1',{}).get('health')}/{st.get('p2',{}).get('health')} presses {pr.get('p1',{}).get('total')}/{pr.get('p2',{}).get('total')} panel calls {p.get('totals',{}).get('calls')} (all should be round-1 / zero)")
     out.append(run_match("match 2", MatchTracker()))
-    p = latest.get("panel") or {}; click("Stop"); time.sleep(10)
+    p = latest.get("panel") or {}; click("Stop", "stop"); time.sleep(10)
     out.append(f"Stop: buttons {buttons()}; panel totals before stop calls={p.get('totals',{}).get('calls')} cost={p.get('totals',{}).get('cost_usd')}")
     stop.set(); LOG.close()
     # summary of the log

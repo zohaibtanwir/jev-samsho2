@@ -66,6 +66,7 @@ export default function App() {
         {/* MJPEG <img>: WebKit decodes natively (sam-yku.10). Canvas path kept as fallback. */}
         {streamLive ? <img id="game" className="game" src={streamUrl} alt="game view" onError={() => setStreamOk(false)} />
                     : <canvas id="game" className="game" ref={frame.canvas} width={320} height={224} />}
+        {!streamLive && <div className="view-msg">{phase === "booting" ? "Starting MAME and the match… about 40 s. The game appears here." : phase === "stopped" ? "Stopped. Press Start to boot MAME and begin an Earthquake vs Nakoruru match." : "Waiting for frames…"}</div>}
         <div className="view-overlay">view fps <b>{streamLive ? (mjpegFps ?? 0) : frame.fps}</b>{streamLive ? " (mjpeg)" : ` · frames ${frame.frames} · dropped ${frame.dropped.current}`} · ws {wsOpen ? "open" : "closed"}</div>
       </section>
       <section className="panel" aria-label="panel">
