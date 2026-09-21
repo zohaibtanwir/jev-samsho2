@@ -14,7 +14,7 @@
 ## Git
 - Commit messages end with the bead ID, e.g. `Make P1 walk right from Lua (sam-a1b2)`.
 - Never use silent git flags such as `-q`.
-- No git remote exists. Commit locally, never push. Ignore the push steps in `AGENTS.md` until a remote is added.
+- Remote: `origin` = https://github.com/zohaibtanwir/jev-samsho2 (private, added 21 Sep 2026). Push `main` after every task close; never force-push.
 
 ## Secrets
 - The Jev API key is in the `TYPESAFE_API_KEY` environment variable. Never print it, log it, or write it to any file.
@@ -22,6 +22,7 @@
 ## Known environment
 - MacBook Air M3, macOS Tahoe.
 - Beads is already installed. Do not install it.
+- Rust toolchain installed via rustup on 21 Sep 2026 (minimal profile, `~/.cargo/bin`, not on PATH by default: use `source ~/.cargo/env` or the full path). Node 22 / pnpm 11 present.
 - MAME 0.289 is installed. The working folder is `~/mame`. ROMs are in `~/mame/roms`. The rompath in `~/mame/mame.ini` is relative, so MAME must be launched from `~/mame`.
 - `samsho2` verifies as good: `mame -verifyroms samsho2`.
 - Existing artifacts; read them before planning:
