@@ -59,7 +59,11 @@ fn start_bridge(state: State<Sidecar>, windowed: Option<bool>) -> Result<Status,
         .spawn()
         .map_err(|e| format!("spawn failed: {e}"))?;
     let pid = child.id();
-    std::fs::write("/tmp/sam2/pids", format!("{pid} bridge\n")).ok();
+    // append: start-app records the app's own PID in the same file
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/sam2/pids") {
+        use std::io::Write;
+        let _ = writeln!(f, "{pid} bridge");
+    }
     *guard = Some(child);
     Ok(Status { running: true, pid: Some(pid), repo })
 }
@@ -74,12 +78,12 @@ fn stop_bridge(state: State<Sidecar>, timeout_s: Option<u64>) -> Result<String, 
     let deadline = Instant::now() + Duration::from_secs(timeout_s.unwrap_or(8));
     loop {
         match child.try_wait() {
-            Ok(Some(status)) => { *guard = None; std::fs::remove_file("/tmp/sam2/pids").ok(); return Ok(format!("bridge exited: {status}")); }
+            Ok(Some(status)) => { *guard = None; return Ok(format!("bridge exited: {status}")); }
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(200)),
             Ok(None) => {
                 child.kill().map_err(|e| e.to_string())?;
                 let _ = child.wait();
-                *guard = None; std::fs::remove_file("/tmp/sam2/pids").ok();
+                *guard = None;
                 return Ok("bridge killed after timeout".into());
             }
             Err(e) => return Err(e.to_string()),
