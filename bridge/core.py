@@ -156,10 +156,17 @@ class Bridge:
     def _log(self, msg: str) -> None:
         self.log.write(f"{time.time():.3f} {msg}\n"); self.log.flush()
 
+    def _round_live(self, state: dict[str, Any]) -> bool:
+        # No round-phase field yet: treat a KO'd fighter as 'not live' so we do
+        # not burn calls between rounds (findings in sam-e8s.2 / sam-e8s.4).
+        return bool(state.get("match_live")) and state["p1"]["health"] > 0 and state["p2"]["health"] > 0
+
     def step(self, state: dict[str, Any]) -> list[dict[str, Any]]:
         """One pass with a fresh state: update history, fire due fighters."""
         self.history.update(state)
         out = []
+        if hasattr(self.dm, "drain"):
+            return self._step_async(state)
         for who in self.ticker.due():
             other = "p2" if who == "p1" else "p1"
             intent = self.dm.decide(state, who, self.history.last(other))
@@ -174,10 +181,48 @@ class Bridge:
 
     stop_requested = False
 
+    def _step_async(self, state: dict[str, Any]) -> list[dict[str, Any]]:
+        """Jev path: issue due calls without waiting, apply finished ones (newest wins)."""
+        out = []
+        if self._round_live(state):
+            for who in self.ticker.due():
+                other = "p2" if who == "p1" else "p1"
+                self.dm.tick(state, who, self.history.last(other))
+                self._log(f"call {who} state_seq={state['seq']} frame={state['frame']} in_flight={self.dm.in_flight()}")
+        for r, apply in self.dm.drain():
+            a = self.dm.applier
+            if r.decision is None:
+                self._log(f"error {r.who} state_seq={r.state_seq} rtt_ms={r.rtt_ms:.0f} {r.error}")
+                continue
+            d = r.decision
+            mark = "applied" if apply else "stale"
+            if apply:
+                if self._round_live(state):
+                    doc = self.writer.write({r.who: d.intent}, self.source)
+                    action_seq = doc["seq"]
+                    out.append(doc)
+                else:
+                    action_seq = None; mark = "applied-noround"
+                self.decisions += 1
+                self.last_decision[r.who] = {"intent": d.intent, "state_seq": r.state_seq, "frame": state["frame"], "action_seq": action_seq,
+                                             "wall": time.time(), "rtt_ms": d.rtt_ms, "confidence": d.confidence,
+                                             "probabilities": d.probabilities, "opponent_recovering": d.opponent_recovering,
+                                             "opp_last3": self.history.last("p2" if r.who == "p1" else "p1")}
+            self._log(f"reply {r.who} seq_sent={r.state_seq} last_applied={a.last_applied[r.who]} rtt_ms={d.rtt_ms:.0f} intent={d.intent} "
+                      f"conf={d.confidence:.2f} recovering={d.opponent_recovering:.2f} {mark} in={d.input_tokens} out={d.output_tokens} "
+                      f"totals calls={self.dm.calls} applied={a.applied} stale={a.stale} errors={a.errors}")
+        return out
+
     def telemetry(self, state: dict[str, Any]) -> dict[str, Any]:
         """What the UI gets with every new state (grows in sam-l4r.3)."""
+        jv = None
+        if hasattr(self.dm, "applier"):
+            a = self.dm.applier; r = sorted(self.dm.rtts)
+            jv = {"calls": self.dm.calls, "applied": a.applied, "stale": a.stale, "errors": a.errors, "in_flight": self.dm.in_flight(),
+                  "input_tokens": a.input_tokens, "output_tokens": a.output_tokens,
+                  "rtt_ms_last": r and self.dm.rtts[-1], "rtt_ms_p50": r[len(r) // 2] if r else None}
         return {"type": "telemetry", "wall": time.time(), "state": state, "source": self.source,
-                "decisions": self.decisions, "last_decision": self.last_decision,
+                "decisions": self.decisions, "last_decision": self.last_decision, "jev": jv,
                 "loop": self.stats.summary(), "relay": self.relay.stats() if self.relay else None}
 
     def run(self, seconds: float) -> None:
@@ -208,6 +253,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--seconds", type=float, default=0.0, help="run time; 0 = until SIGTERM/SIGINT")
     ap.add_argument("--wait", type=float, default=90.0, help="max seconds to wait for a live match")
     ap.add_argument("--relay", action="store_true", help="serve frames + telemetry on ws://127.0.0.1:8765")
+    ap.add_argument("--jev", action="store_true", help="decide with Jev instead of the dummy (needs TYPESAFE_API_KEY)")
     a = ap.parse_args(argv)
     t0 = time.monotonic()
     while True:
@@ -222,11 +268,18 @@ def main(argv: list[str] | None = None) -> int:
     if a.relay:
         from bridge.relay import Relay
         relay = Relay(); relay.start()
-    bridge = Bridge(DummyDecisionMaker(), source="dummy", relay=relay)
+    if a.jev:
+        from bridge.jevdm import JevDecisionMaker
+        dm, source = JevDecisionMaker(), "jev"
+    else:
+        dm, source = DummyDecisionMaker(), "dummy"
+    bridge = Bridge(dm, source=source, relay=relay)
     def _stop(signum, frame):
         bridge.stop_requested = True
     signal.signal(signal.SIGTERM, _stop); signal.signal(signal.SIGINT, _stop)
     bridge.run(a.seconds)
+    if hasattr(dm, "close"):
+        dm.close()
     if relay:
         relay.stop()
     return 0
