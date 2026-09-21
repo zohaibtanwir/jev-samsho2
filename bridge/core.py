@@ -141,8 +141,10 @@ class LoopStats:
 class Bridge:
     def __init__(self, decision_maker: DecisionMaker, source: str = "dummy",
                  state_path: str = STATE_PATH, writer: ActionWriter | None = None,
-                 log_path: str = LOG_PATH, poll_s: float = 0.002):
+                 log_path: str = LOG_PATH, poll_s: float = 0.002, relay=None):
         self.dm, self.source = decision_maker, source
+        self.relay = relay
+        self.last_decision: dict[str, dict[str, Any]] = {}
         self.state_path, self.poll_s = state_path, poll_s
         self.writer = writer or ActionWriter()
         self.history = ActionHistory()
@@ -163,12 +165,20 @@ class Bridge:
             intent = self.dm.decide(state, who, self.history.last(other))
             doc = self.writer.write({who: intent}, self.source)
             self.decisions += 1
+            self.last_decision[who] = {"intent": intent, "state_seq": state["seq"], "frame": state["frame"],
+                                       "action_seq": doc["seq"], "wall": time.time(), "opp_last3": self.history.last(other)}
             self._log(f"decision {who} state_seq={state['seq']} frame={state['frame']} intent={intent} action_seq={doc['seq']} "
                       f"opp_last3={','.join(self.history.last(other)) or '-'} gap={state['gap']} hp={state[who]['health']}")
             out.append(doc)
         return out
 
     stop_requested = False
+
+    def telemetry(self, state: dict[str, Any]) -> dict[str, Any]:
+        """What the UI gets with every new state (grows in sam-l4r.3)."""
+        return {"type": "telemetry", "wall": time.time(), "state": state, "source": self.source,
+                "decisions": self.decisions, "last_decision": self.last_decision,
+                "loop": self.stats.summary(), "relay": self.relay.stats() if self.relay else None}
 
     def run(self, seconds: float) -> None:
         """Run for `seconds`; 0 or less means until stop_requested (SIGTERM)."""
@@ -181,6 +191,8 @@ class Bridge:
             if st is not None and st.get("seq") != last_seq and st.get("match_live"):
                 last_seq = st["seq"]
                 self.step(st)
+                if self.relay:
+                    self.relay.publish(self.telemetry(st))
             self.stats.add((time.perf_counter() - t0) * 1000.0)
             if time.monotonic() - last_report >= 5.0:
                 self._log(self.stats.summary() + f" decisions={self.decisions}")
@@ -195,6 +207,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="samsho2 bridge (dummy decision-maker)")
     ap.add_argument("--seconds", type=float, default=0.0, help="run time; 0 = until SIGTERM/SIGINT")
     ap.add_argument("--wait", type=float, default=90.0, help="max seconds to wait for a live match")
+    ap.add_argument("--relay", action="store_true", help="serve frames + telemetry on ws://127.0.0.1:8765")
     a = ap.parse_args(argv)
     t0 = time.monotonic()
     while True:
@@ -205,11 +218,17 @@ def main(argv: list[str] | None = None) -> int:
             print("no live match"); return 1
         time.sleep(0.1)
     import signal
-    bridge = Bridge(DummyDecisionMaker(), source="dummy")
+    relay = None
+    if a.relay:
+        from bridge.relay import Relay
+        relay = Relay(); relay.start()
+    bridge = Bridge(DummyDecisionMaker(), source="dummy", relay=relay)
     def _stop(signum, frame):
         bridge.stop_requested = True
     signal.signal(signal.SIGTERM, _stop); signal.signal(signal.SIGINT, _stop)
     bridge.run(a.seconds)
+    if relay:
+        relay.stop()
     return 0
 
 

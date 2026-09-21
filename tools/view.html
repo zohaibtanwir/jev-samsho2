@@ -1,0 +1,28 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>sam2 view</title>
+<style>
+ body{margin:0;background:#111;color:#ddd;font:13px/1.4 -apple-system,Menlo,monospace;display:grid;grid-template-columns:660px 1fr;gap:12px;padding:12px}
+ canvas{width:640px;height:448px;image-rendering:pixelated;background:#000;border:1px solid #333}
+ #bar{margin-top:6px} b{color:#fff} pre{margin:0;white-space:pre-wrap;max-height:90vh;overflow:auto;background:#181818;padding:8px;border:1px solid #333}
+</style></head><body>
+<div><canvas id="c" width="320" height="224"></canvas>
+ <div id="bar">ws: <b id="ws">connecting</b> · view fps: <b id="fps">0</b> · frames: <b id="n">0</b> · last jpeg: <b id="kb">0</b> kB · telemetry msgs: <b id="tn">0</b></div></div>
+<pre id="t">(waiting for telemetry)</pre>
+<script>
+const c=document.getElementById('c'),ctx=c.getContext('2d');
+let n=0,tn=0,times=[];
+function connect(){
+  const ws=new WebSocket('ws://127.0.0.1:8765'); ws.binaryType='blob';
+  ws.onopen=()=>document.getElementById('ws').textContent='open';
+  ws.onclose=()=>{document.getElementById('ws').textContent='closed, retrying';setTimeout(connect,1000)};
+  ws.onmessage=async e=>{
+    if(typeof e.data==='string'){tn++;document.getElementById('tn').textContent=tn;
+      document.getElementById('t').textContent=JSON.stringify(JSON.parse(e.data),null,1);return}
+    const bmp=await createImageBitmap(e.data); ctx.drawImage(bmp,0,0); bmp.close();
+    n++;const now=performance.now();times.push(now);while(times.length&&times[0]<now-1000)times.shift();
+    document.getElementById('n').textContent=n;document.getElementById('fps').textContent=times.length;
+    document.getElementById('kb').textContent=(e.data.size/1024).toFixed(1);
+  };
+}
+connect();
+</script></body></html>

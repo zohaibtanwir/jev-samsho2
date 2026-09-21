@@ -1,0 +1,3 @@
+# Beyond the standard library. Both were already present in this Mac's python3 (anaconda) on 21 Sep 2026.
+websockets>=12     # bridge/relay.py: WebSocket server for frames + telemetry
+Pillow>=10         # bridge/relay.py: JPEG encoding of frame.raw
