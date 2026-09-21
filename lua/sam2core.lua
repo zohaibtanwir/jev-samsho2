@@ -121,7 +121,42 @@ function C.poll_action(st, frame)
   if C.SNAP_ON_ACTION then pcall(function() manager.machine.video:snapshot() end) end
   return a
 end
+-- ---- reflex layer (bead sam-amj.3, PRD section 8 item 7; v1 = block only)
+-- Plain rule, every frame: if the opponent is in the startup or active
+-- frames of an attack and the gap is within that character's reach, hold
+-- 'away' (block) until the attack's active window has passed. Reflex presses
+-- take precedence over the Jev intent (executor.reflex) and are tagged
+-- source=reflex in presses.log. Reach per attacker (px of gap), measured in
+-- sam-amj.5 / sam-aug.2: Earthquake's heavy lands at 160 and whiffs at 60;
+-- Nakoruru's normals land from ~110.
+C.REFLEX = true
+C.REACH = { Earthquake = 180, Nakoruru = 115 }
+C.REFLEX_MARGIN = 8            -- px added to reach, so we block a little early
+C.REFLEX_TAIL = 6              -- frames to keep blocking after the active window
+C.reflex_events = { p1 = 0, p2 = 0 }
+local reflex_on = { p1 = false, p2 = false }
+local function threat(me, them, gap)
+  if them.action ~= "startup" and them.action ~= "active" then return false end
+  local reach = (C.REACH[them.char] or 120) + C.REFLEX_MARGIN
+  return gap <= reach
+end
+local function step_reflex(st)
+  if not C.REFLEX then return end
+  for _, who in ipairs({ "p1", "p2" }) do
+    local other = (who == "p1") and "p2" or "p1"
+    local me, them = st[who], st[other]
+    if threat(me, them, st.gap) then
+      C.ex[who]:reflex(st.frame, { "AWAY" }, C.REFLEX_TAIL)   -- re-armed every threatening frame
+      if not reflex_on[who] then reflex_on[who] = true; C.reflex_events[who] = C.reflex_events[who] + 1
+        SM.say("frame %d  reflex %s: block vs %s %s (gap %d)", st.frame, who, them.char, them.action_name or "?", st.gap) end
+    else
+      reflex_on[who] = false
+    end
+  end
+end
+
 local function step_exec(st)
+  step_reflex(st)
   C.ex.p1:tick(st.frame, st.p1, st.p2)
   C.ex.p2:tick(st.frame, st.p2, st.p1)
 end
@@ -218,6 +253,7 @@ function C.read_state(frame)
     p1 = p1, p2 = p2, gap = math.abs(p2.x - p1.x),
     action_seq = last_action_seq, last_action = last and { seq = last.seq, frame = last.frame, p1 = last.p1, p2 = last.p2 } or nil,
     control_seq = C.control_seq, paused = C.paused, last_control = C.control_log[#C.control_log],
+    reflex_events = { p1 = C.reflex_events.p1, p2 = C.reflex_events.p2 },
   }
 end
 
