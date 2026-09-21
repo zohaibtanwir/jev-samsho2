@@ -189,6 +189,8 @@ local function apply_control(cmd, frame)
     C.ex.p1:set_intent("none", "control", frame); C.ex.p2:set_intent("none", "control", frame)
     C.ex.p1:release_all(); C.ex.p2:release_all()
     tr1, tr2 = MV.new_tracker(C.P1_NAME), MV.new_tracker(C.P2_NAME)
+    for _, e in pairs(C.ex) do e.presses = 0; e.counts = { jev = 0, reflex = 0, test = 0, other = 0 } end   -- Reset clears the press totals (PRD section 6)
+    C.reflex_events = { p1 = 0, p2 = 0 }
     manager.machine:load(C.MATCH_STATE)
     if C.paused then emu.unpause(); C.paused = false end
   elseif cmd == "stop" then
