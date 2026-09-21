@@ -278,8 +278,12 @@ end
 -- C.FRAMES = false turns it off (used by the speed comparison in sam-e8s.5).
 C.FRAMES = true
 C.FRAME_EVERY = 2
-C.FRAME_PATH, C.FRAME_TMP = "/tmp/sam2/frame.raw", "/tmp/sam2/frame.tmp"
-C.META_PATH, C.META_TMP = "/tmp/sam2/frame.meta", "/tmp/sam2/frame.meta.tmp"
+-- Frame files can live on a RAM disk (SAM2_FRAME_DIR, set by the bridge when
+-- /Volumes/sam2ram exists): 8.6 MB/s of raw frames to the SSD stalled MAME
+-- when the built app was also writing (sam-yku.10).
+C.FRAME_DIR = os.getenv("SAM2_FRAME_DIR") or "/tmp/sam2"
+C.FRAME_PATH, C.FRAME_TMP = C.FRAME_DIR .. "/frame.raw", C.FRAME_DIR .. "/frame.tmp"
+C.META_PATH, C.META_TMP = C.FRAME_DIR .. "/frame.meta", C.FRAME_DIR .. "/frame.meta.tmp"
 local frame_seq = 0
 local screen
 function C.write_frame(frame)

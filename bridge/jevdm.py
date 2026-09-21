@@ -91,6 +91,8 @@ class JevPool:
             self.jobs.put(None)
 
     def _worker(self, client) -> None:
+        from bridge.qos import set_interactive
+        set_interactive()
         while True:
             job = self.jobs.get()
             if job is None:

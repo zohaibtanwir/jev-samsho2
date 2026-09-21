@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- MAME and the bridge are children of this app; App Nap would throttle them when the window is in the background (sam-yku.10). -->
+  <key>NSAppSleepDisabled</key>
+  <true/>
+  <key>LSMinimumSystemVersion</key>
+  <string>12.0</string>
+</dict>
+</plist>

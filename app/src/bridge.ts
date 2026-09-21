@@ -9,7 +9,7 @@ export const startBridge = (windowed = false) => invoke<Status>("start_bridge", 
 export const stopBridge = (timeoutS = 8) => invoke<string>("stop_bridge", { timeoutS });
 export const bridgeStatus = () => invoke<Status>("bridge_status");
 
-export type Telemetry = { type: "telemetry"; wall: number; state: any; panel: any; paused: boolean; phase: string; jev: any; loop: string; relay: any };
+export type Telemetry = { type: "telemetry"; wall: number; state: any; panel: any; paused: boolean; phase: string; jev: any; loop: string; relay: any & { mjpeg?: { fps: number; clients: number } } };
 
 /** Persistent WebSocket with reconnect. onFrame gets JPEG blobs, onTelemetry parsed JSON. */
 export class BridgeSocket {

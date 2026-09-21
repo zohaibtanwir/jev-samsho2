@@ -5,8 +5,8 @@ Drives the BUILT app through System Events (Accessibility): Start, a full
 match to a winner (two rounds to one fighter), Pause + Resume, Reset, a
 second full match, Stop. Logs one line per second to /tmp/sam2/acceptance.log:
   wall phase timer hp1 hp2 emulation_speed% view_fps calls presses1 presses2
-emulation speed comes from the bridge telemetry (WebSocket); view fps is
-read from the app window's overlay. Prints a summary per section 10 item.
+emulation speed and the view fps (MJPEG frames delivered to the app per
+second, the figure its overlay shows) both come from the bridge telemetry. Prints a summary per section 10 item.
 Deps: websockets (already installed).   python3 tools/acceptance.py
 """
 import asyncio, json, subprocess, threading, time, websockets
@@ -40,7 +40,8 @@ def logger(stop):
     last_fps, n = None, 0
     while not stop.is_set():
         st = latest.get("state") or {}
-        if n % 5 == 0: last_fps = view_fps()
+        mj = (latest.get("relay") or {}).get("mjpeg") or {}
+        last_fps = mj.get("fps")                 # what the app's overlay shows: frames delivered to the view per second
         p = latest.get("panel") or {}
         tot = p.get("totals", {})
         pr = st.get("presses") or {}

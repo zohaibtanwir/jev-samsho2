@@ -21,9 +21,12 @@ from typing import Any
 from PIL import Image
 import websockets
 
+from bridge import mjpeg
+
 SAM2 = "/tmp/sam2"
-FRAME_RAW = os.path.join(SAM2, "frame.raw")
-FRAME_META = os.path.join(SAM2, "frame.meta")
+FRAME_DIR = os.environ.get("SAM2_FRAME_DIR") or ("/Volumes/sam2ram" if os.path.isdir("/Volumes/sam2ram") else SAM2)
+FRAME_RAW = os.path.join(FRAME_DIR, "frame.raw")
+FRAME_META = os.path.join(FRAME_DIR, "frame.meta")
 HOST, PORT = "127.0.0.1", 8765
 JPEG_QUALITY = 80
 
@@ -62,6 +65,7 @@ class Relay:
 
     # ---- lifecycle
     def start(self) -> None:
+        self.mjpeg = mjpeg.serve()          # http://127.0.0.1:8766/stream
         self._thread = threading.Thread(target=self._run, name="relay", daemon=True)
         self._thread.start()
         self.ready.wait(5)
@@ -72,6 +76,8 @@ class Relay:
             self._thread.join(3)
 
     def _run(self) -> None:
+        from bridge.qos import set_interactive
+        set_interactive()
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
         self.loop.run_until_complete(self._main())
@@ -120,7 +126,7 @@ class Relay:
     async def _frame_pump(self) -> None:
         while not self._stop.is_set():
             meta = read_meta()
-            if meta and meta[4] != self.last_seq and self.clients:
+            if meta and meta[4] != self.last_seq and (self.clients or mjpeg.BUS.clients):
                 w, h, n, emu_frame, seq = meta
                 try:
                     raw = open(FRAME_RAW, "rb").read()
@@ -132,7 +138,9 @@ class Relay:
                             del self.encode_ms[:100]
                         self.last_seq = seq
                         self.frames_sent += 1
-                        await self._broadcast(jpg)
+                        mjpeg.BUS.publish(jpg)          # encoded once, served both ways
+                        if self.clients:
+                            await self._broadcast(jpg)
                 except (FileNotFoundError, ValueError):
                     pass
             await asyncio.sleep(self.poll_s)
@@ -140,4 +148,5 @@ class Relay:
     def stats(self) -> dict[str, Any]:
         e = sorted(self.encode_ms)
         return {"clients": len(self.clients), "frames_sent": self.frames_sent, "last_frame_seq": self.last_seq,
-                "encode_ms_p50": e[len(e) // 2] if e else None, "encode_ms_max": e[-1] if e else None}
+                "encode_ms_p50": e[len(e) // 2] if e else None, "encode_ms_max": e[-1] if e else None,
+                "mjpeg": mjpeg.BUS.stats()}

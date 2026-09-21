@@ -20,9 +20,10 @@ export default function App() {
   useEffect(() => { if (!inTauri) return; bridgeStatus().then((s) => { if (s.running) setPhase("booting"); }).catch(() => {}); }, [inTauri]);
 
   const latest = useRef<Telemetry | null>(null);
+  const streamOn = useRef(true);
   useEffect(() => {
     // telemetry arrives with every emulated frame (~60/s); keep the newest and flush to React at 10 Hz
-    const s = new BridgeSocket(frame.onFrame, (t) => { latest.current = t; }, setWsOpen);
+    const s = new BridgeSocket((b) => { if (!streamOn.current) frame.onFrame(b); }, (t) => { latest.current = t; }, setWsOpen);
     s.open(); sock.current = s;
     const id = setInterval(() => { if (latest.current) { setTele(latest.current); latest.current = null; } }, 100);
     return () => { clearInterval(id); s.close(); };
@@ -33,7 +34,7 @@ export default function App() {
     if (!tele) return;
     const p = tele.phase as Phase;
     if (p === "running" && startedAt.current) { setMsg(`match running ${((Date.now() - startedAt.current) / 1000).toFixed(1)} s after Start`); startedAt.current = null; }
-    if (phase !== "stopped" || !inTauri) setPhase(p);   // browser preview follows the bridge
+    if (phase !== "stopped" || !inTauri || p !== "booting") setPhase(p);   // also adopt a bridge started elsewhere (skill, shell)
   }, [tele]);
   // if the sidecar dies, drop back to stopped
   useEffect(() => { const id = setInterval(async () => { if (!inTauri) return; try { const s = await bridgeStatus(); if (!s.running && phase !== "stopped") { setPhase("stopped"); setMsg("bridge exited"); } } catch {} }, 2000); return () => clearInterval(id); }, [phase, inTauri]);
@@ -54,11 +55,18 @@ export default function App() {
   const onReset = () => { sock.current?.send("reset"); setMsg("reset sent"); };
 
   const panel = tele?.panel ?? finalPanel;               // after Stop the last telemetry stays on screen
+  const mjpegFps: number | undefined = tele?.relay?.mjpeg?.fps;
+  const streamUrl = "http://127.0.0.1:8766/stream";
+  const [streamOk, setStreamOk] = useState(true);
+  const streamLive = wsOpen && streamOk && phase !== "stopped";
+  streamOn.current = streamLive;
   return (
     <div className="app">
       <section className="view" aria-label="game view">
-        <canvas id="game" ref={frame.canvas} width={320} height={224} />
-        <div className="view-overlay">view fps <b>{frame.fps}</b> · frames {frame.frames} · dropped {frame.dropped.current} · ws {wsOpen ? "open" : "closed"}</div>
+        {/* MJPEG <img>: WebKit decodes natively (sam-yku.10). Canvas path kept as fallback. */}
+        {streamLive ? <img id="game" className="game" src={streamUrl} alt="game view" onError={() => setStreamOk(false)} />
+                    : <canvas id="game" className="game" ref={frame.canvas} width={320} height={224} />}
+        <div className="view-overlay">view fps <b>{streamLive ? (mjpegFps ?? 0) : frame.fps}</b>{streamLive ? " (mjpeg)" : ` · frames ${frame.frames} · dropped ${frame.dropped.current}`} · ws {wsOpen ? "open" : "closed"}</div>
       </section>
       <section className="panel" aria-label="panel">
         <div className="controls">
@@ -68,7 +76,7 @@ export default function App() {
           <button disabled={phase === "stopped"} onClick={onStop}>Stop</button>
           <span className="status">status: <b>{phase}</b>{msg ? ` · ${msg}` : ""}{inTauri ? "" : " · browser preview (no process control)"}</span>
         </div>
-        <Panel panel={panel} state={tele?.state} viewFps={frame.fps} />
+        <Panel panel={panel} state={tele?.state} viewFps={streamLive ? (mjpegFps ?? 0) : frame.fps} />
       </section>
     </div>
   );

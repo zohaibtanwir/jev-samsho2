@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import statistics
+import sys
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -303,8 +304,11 @@ class Bridge:
         self._log(f"bridge start source={self.source} tick={TICK_S:.3f}s seconds={seconds}")
         t_end = time.monotonic() + seconds if seconds > 0 else float("inf")
         last_seq, last_report = None, time.monotonic()
+        parent = os.getppid()
         while time.monotonic() < t_end and not self.stop_requested:
             t0 = time.perf_counter()
+            if os.getppid() != parent:            # the app that spawned us is gone: never run orphaned
+                self._log("parent process gone; stopping"); self.command("stop"); break
             self._poll_cmd_file()
             if self.relay:
                 for cmd in self.relay.drain_commands():
@@ -333,6 +337,11 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MAME_LOG = os.path.join(SAM2, "mame.log")
 
 
+def raise_qos() -> str:
+    from bridge.qos import set_interactive
+    return set_interactive()
+
+
 def launch_mame(windowed: bool = False):
     """Start MAME from ~/mame (relative rompath) with lua/sam2.lua. Returns the Popen."""
     import subprocess
@@ -341,7 +350,11 @@ def launch_mame(windowed: bool = False):
     cmd = ["mame", "samsho2", *video, "-sound", "none", "-skip_gameinfo",
            "-autoboot_script", os.path.join(REPO, "lua", "sam2.lua"), "-autoboot_delay", "3"]
     log = open(MAME_LOG, "w")
-    p = subprocess.Popen(cmd, cwd=MAME_DIR, stdout=log, stderr=subprocess.STDOUT)
+    env = dict(os.environ)
+    frame_dir = os.environ.get("SAM2_FRAME_DIR") or ("/Volumes/sam2ram" if os.path.isdir("/Volumes/sam2ram") else SAM2)
+    env["SAM2_FRAME_DIR"] = frame_dir
+    os.makedirs(frame_dir, exist_ok=True)
+    p = subprocess.Popen(cmd, cwd=MAME_DIR, stdout=log, stderr=subprocess.STDOUT, env=env)
     with open(os.path.join(SAM2, "mame.pid"), "w") as f:
         f.write(str(p.pid))
     return p
@@ -371,6 +384,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--mame-window", action="store_true", help="with --launch-mame: windowed instead of -video none")
     a = ap.parse_args(argv)
     mame = None
+    qos = raise_qos()
     if a.launch_mame:
         mame = launch_mame(windowed=a.mame_window)
     t0 = time.monotonic()
@@ -399,7 +413,7 @@ def main(argv: list[str] | None = None) -> int:
         dm, source = DummyDecisionMaker(), "dummy"
     bridge = Bridge(dm, source=source, relay=relay)
     bridge.tele = Telemetry({"p1": "Earthquake", "p2": "Nakoruru"}, baseline)
-    bridge._log(f"network baseline (median TCP connect) = {baseline} ms")
+    bridge._log(f"network baseline (median TCP connect) = {baseline} ms; qos: {qos}")
     def _stop(signum, frame):
         bridge.stop_requested = True
     signal.signal(signal.SIGTERM, _stop); signal.signal(signal.SIGINT, _stop)
