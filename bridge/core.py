@@ -245,7 +245,11 @@ class Bridge:
             jv = {"calls": self.dm.calls, "applied": a.applied, "stale": a.stale, "errors": a.errors, "in_flight": self.dm.in_flight(),
                   "input_tokens": a.input_tokens, "output_tokens": a.output_tokens,
                   "rtt_ms_last": r and self.dm.rtts[-1], "rtt_ms_p50": r[len(r) // 2] if r else None}
-        return {"type": "telemetry", "wall": time.time(), "state": state, "source": self.source, "paused": self.paused, "control_seq": self.control_seq,
+        if self.paused: phase = "paused"
+        elif self._round_live(state): phase = "running"
+        elif state.get("match_live"): phase = "between_rounds"
+        else: phase = "booting"
+        return {"type": "telemetry", "wall": time.time(), "state": state, "source": self.source, "paused": self.paused, "control_seq": self.control_seq, "phase": phase,
                 "panel": self.tele.snapshot(state) if self.tele else None,
                 "decisions": self.decisions, "last_decision": self.last_decision, "jev": jv,
                 "loop": self.stats.summary(), "relay": self.relay.stats() if self.relay else None}
