@@ -4,10 +4,14 @@
 Polls the file; a new `seq` means a new frame. Stdlib only.
     python3 tools/state_watch.py [seconds]
 """
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from bridge import paths
+
 import json, os, sys, time
 
-SRC = "/tmp/sam2/state.json"
-DST = "/tmp/sam2/state_log.jsonl"
+SRC = paths.STATE
+DST = os.path.join(paths.LOGS, "state_log.jsonl")
 
 def main():
     limit = float(sys.argv[1]) if len(sys.argv) > 1 else 60.0

@@ -10,7 +10,13 @@ local SM = dofile(here .. "start_match.lua")
 local MM = dofile(here .. "memmap.lua")
 local MV = dofile(here .. "moveids.lua")
 
-local C = { SM = SM, MM = MM, MV = MV, STATE_PATH = "/tmp/sam2/state.json", TMP_PATH = "/tmp/sam2/state.tmp" }
+-- Exchange files go to SAM2_DIR (a RAM disk when the bridge mounted one):
+-- APFS writes from the emulator thread stalled MAME 10-17 ms at a time
+-- (bead sam-yku.11). Logs stay in SAM2_LOGS.
+local DIR = os.getenv("SAM2_DIR") or "/tmp/sam2"
+local LOGS = os.getenv("SAM2_LOGS") or "/tmp/sam2"
+local C = { SM = SM, MM = MM, MV = MV, DIR = DIR, LOGS = LOGS,
+            STATE_PATH = DIR .. "/state.json", TMP_PATH = DIR .. "/state.tmp" }
 C.P1_NAME, C.P2_NAME = "Earthquake", "Nakoruru"
 
 -- JSON: MAME ships a json module; fall back to a tiny encoder if absent.
@@ -89,16 +95,21 @@ C.decode = (ok_json and json.parse) or decode
 -- presses is done by lua/executor.lua, which logs every press to
 -- /tmp/sam2/presses.log ("frame who buttons source intent").
 local EX = dofile(here .. "executor.lua")
-C.ACTION_PATH = "/tmp/sam2/action.json"
-C.PRESS_LOG = "/tmp/sam2/presses.log"
+C.ACTION_PATH = DIR .. "/action.json"
+C.PRESS_LOG = LOGS .. "/presses.log"
 C.INTENTS = { advance = true, retreat = true, attack = true, block = true, bait = true, none = true }  -- none: release everything (tests, pause)
 C.SNAP_ON_ACTION = false
 local last_action_seq = 0
 local last_action_session = nil
-local press_f
-local function press_log(line)
+-- Presses are logged from the emulator thread: buffer them and flush once a
+-- second (with the speed log) instead of fsyncing per press (bead sam-yku.11).
+local press_f, press_buf = nil, {}
+local function press_log(line) press_buf[#press_buf + 1] = line end
+function C.flush_presses()
+  if #press_buf == 0 then return end
   press_f = press_f or io.open(C.PRESS_LOG, "a")
-  if press_f then press_f:write(line, "\n"); press_f:flush() end
+  if press_f then press_f:write(table.concat(press_buf, "\n"), "\n"); press_f:flush() end
+  press_buf = {}
 end
 C.ex = {
   p1 = EX.new{ who = "p1", port = ":edge:joy:JOY1", prefix = "P1 ", character = C.P1_NAME, log = press_log },
@@ -173,8 +184,8 @@ end
 -- the file is also polled from a coroutine on emu.wait_next_update(), which
 -- keeps running at UI rate during a pause. reset reloads the state saved at
 -- MATCH_LIVE_AT (round 1, full health) and clears executors and trackers.
-C.CONTROL_PATH = "/tmp/sam2/control.json"
-C.MATCH_STATE = "/tmp/sam2/match_start.sta"
+C.CONTROL_PATH = DIR .. "/control.json"
+C.MATCH_STATE = LOGS .. "/match_start.sta"
 C.paused = false
 C.control_seq = 0
 C.control_log = {}
@@ -278,24 +289,66 @@ end
 -- C.FRAMES = false turns it off (used by the speed comparison in sam-e8s.5).
 C.FRAMES = true
 C.FRAME_EVERY = 2
+C.STATE_EVERY = 2          -- 30 writes/s: the bridge decides at 3 Hz, the UI renders at 10 Hz
 -- Frame files can live on a RAM disk (SAM2_FRAME_DIR, set by the bridge when
 -- /Volumes/sam2ram exists): 8.6 MB/s of raw frames to the SSD stalled MAME
 -- when the built app was also writing (sam-yku.10).
-C.FRAME_DIR = os.getenv("SAM2_FRAME_DIR") or "/tmp/sam2"
-C.FRAME_PATH, C.FRAME_TMP = C.FRAME_DIR .. "/frame.raw", C.FRAME_DIR .. "/frame.tmp"
-C.META_PATH, C.META_TMP = C.FRAME_DIR .. "/frame.meta", C.FRAME_DIR .. "/frame.meta.tmp"
-local frame_seq = 0
+C.FRAME_DIR = DIR
+-- Frames rotate through three fixed files whose handles stay open: writing
+-- 286 KB with create+rename 30 times a second churned the volume catalog and
+-- occasionally blocked every other open() on it for ~100 ms, which the
+-- emulator thread felt as a stalled read (bead sam-yku.11). The reader learns
+-- which buffer is current from frame.meta, which is still written atomically.
+C.FRAME_BUFFERS = 3
+C.META_PATH, C.META_TMP = DIR .. "/frame.meta", DIR .. "/frame.meta.tmp"
+C.FRAME_PATH = DIR .. "/frame0.raw"          -- buffer 0, for tools that want one file
+local frame_files, frame_seq, buf_i = nil, 0, 0
 local screen
+
+local function open_buffers(nbytes)
+  frame_files = {}
+  local zero = string.rep("\0", nbytes)
+  for i = 0, C.FRAME_BUFFERS - 1 do
+    local path = string.format("%s/frame%d.raw", DIR, i)
+    local f = io.open(path, "wb")                  -- create at full size once
+    if not f then return false end
+    f:write(zero); f:close()
+    frame_files[i] = io.open(path, "r+b")          -- then keep the handle open
+    if not frame_files[i] then return false end
+  end
+  return true
+end
+
 function C.write_frame(frame)
   screen = screen or manager.machine.screens[":screen"]
   local px, w, h = screen:pixels()
-  local f = io.open(C.FRAME_TMP, "wb"); if not f then return false end
-  f:write(px); f:close()
-  if not os.rename(C.FRAME_TMP, C.FRAME_PATH) then return false end
+  if not frame_files and not open_buffers(#px) then return false end
+  local f = frame_files[buf_i]
+  f:seek("set", 0); f:write(px); f:flush()         -- no create, no rename, no delete
   frame_seq = frame_seq + 1
   local m = io.open(C.META_TMP, "w"); if not m then return false end
-  m:write(string.format("%d %d %d %d %d %.3f\n", w, h, #px, frame, frame_seq, os.time() + (os.clock() % 1))); m:close()
+  m:write(string.format("%d %d %d %d %d %d\n", w, h, #px, frame, frame_seq, buf_i)); m:close()
+  buf_i = (buf_i + 1) % C.FRAME_BUFFERS
   return os.rename(C.META_TMP, C.META_PATH)
+end
+
+-- ---- per-frame timing (bead sam-yku.11) ------------------------------------
+-- emu.osd_ticks() is a nanosecond wall clock, so this measures real stalls
+-- (os.clock would only count CPU). Cost: two calls per measured section.
+local HZ = emu.osd_ticks_per_second()
+local function now_ms() return emu.osd_ticks() / HZ * 1000 end
+C.timing = { state = 0, frame = 0, action = 0, control = 0, exec = 0, worst = 0, worst_what = "-", frames = 0 }
+local function timed(what, fn, ...)
+  local t0 = now_ms()
+  local a, b = fn(...)
+  local dt = now_ms() - t0
+  C.timing[what] = C.timing[what] + dt
+  if dt > C.timing.worst then C.timing.worst = dt; C.timing.worst_what = what end
+  return a, b
+end
+C.timed = timed
+function C.timing_reset()
+  C.timing = { state = 0, frame = 0, action = 0, control = 0, exec = 0, worst = 0, worst_what = "-", frames = 0 }
 end
 
 -- ---- speed log ---------------------------------------------------------------
@@ -307,7 +360,15 @@ local speed_f
 function C.log_speed(frame)
   if not C.SPEED_PATH then return end
   speed_f = speed_f or io.open(C.SPEED_PATH, "w")
-  if speed_f then local r = manager.machine.video.speed_percent; speed_f:write(string.format("%d %.1f %.4f\n", frame, r * 100, r)); speed_f:flush() end
+  if speed_f then
+    local r = manager.machine.video.speed_percent
+    local t = C.timing
+    -- frame speed% raw | ms spent this second in: state frame action control exec | worst single call
+    speed_f:write(string.format("%d %.1f %.4f %.1f %.1f %.1f %.1f %.1f %.1f %s %d\n",
+      frame, r * 100, r, t.state, t.frame, t.action, t.control, t.exec, t.worst, t.worst_what, t.frames))
+    speed_f:flush()
+  end
+  C.timing_reset()
 end
 
 -- Per-frame entry. Returns the state table once the match is live, else nil.
@@ -316,13 +377,14 @@ function C.tick(frame)
   last_frame_seen = frame
   if frame == SM.MATCH_LIVE_AT then manager.machine:save(C.MATCH_STATE); SM.say("frame %d  match-start state saved to %s", frame, C.MATCH_STATE) end
   if frame < SM.MATCH_LIVE_AT then return nil end
-  C.poll_control(frame)
-  local st = C.read_state(frame)
-  C.write_state(st)
-  step_exec(st)
-  C.poll_action(st, frame)
-  if C.FRAMES and frame % C.FRAME_EVERY == 0 then C.write_frame(frame) end
-  if frame % 60 == 0 then C.log_speed(frame) end
+  timed("control", C.poll_control, frame)
+  local st = timed("state", C.read_state, frame)
+  if frame % C.STATE_EVERY == 0 then timed("state", C.write_state, st) end
+  timed("exec", step_exec, st)
+  timed("action", C.poll_action, st, frame)
+  if C.FRAMES and frame % C.FRAME_EVERY == 0 then timed("frame", C.write_frame, frame) end
+  C.timing.frames = C.timing.frames + 1
+  if frame % 60 == 0 then C.log_speed(frame); C.flush_presses() end
   return st
 end
 

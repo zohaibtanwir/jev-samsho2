@@ -23,19 +23,26 @@ import websockets
 
 from bridge import mjpeg
 
-SAM2 = "/tmp/sam2"
-FRAME_DIR = os.environ.get("SAM2_FRAME_DIR") or ("/Volumes/sam2ram" if os.path.isdir("/Volumes/sam2ram") else SAM2)
-FRAME_RAW = os.path.join(FRAME_DIR, "frame.raw")
-FRAME_META = os.path.join(FRAME_DIR, "frame.meta")
+from bridge import paths
+
+SAM2 = paths.LOGS
+FRAME_DIR = paths.DIR
+FRAME_RAW = paths.FRAME_RAW
+FRAME_META = paths.FRAME_META
 HOST, PORT = "127.0.0.1", 8765
 JPEG_QUALITY = 80
 
 
-def read_meta(path: str = FRAME_META) -> tuple[int, int, int, int, int] | None:
-    """(width, height, nbytes, emu_frame, frame_seq) or None."""
+def read_meta(path: str | None = None) -> tuple[int, int, int, int, int] | None:
+    """(width, height, nbytes, emu_frame, frame_seq, buffer_index) or None.
+
+    Lua rotates through frame0/1/2.raw with the handles kept open; the meta
+    names the buffer that is complete (bead sam-yku.11).
+    """
     try:
-        parts = open(path).read().split()
-        return int(parts[0]), int(parts[1]), int(parts[2]), int(parts[3]), int(parts[4])
+        parts = open(path or paths.FRAME_META).read().split()
+        buf = int(parts[5]) if len(parts) > 5 else 0
+        return int(parts[0]), int(parts[1]), int(parts[2]), int(parts[3]), int(parts[4]), buf
     except (FileNotFoundError, ValueError, IndexError):
         return None
 
@@ -127,9 +134,10 @@ class Relay:
         while not self._stop.is_set():
             meta = read_meta()
             if meta and meta[4] != self.last_seq and (self.clients or mjpeg.BUS.clients):
-                w, h, n, emu_frame, seq = meta
+                w, h, n, emu_frame, seq, buf = meta
                 try:
-                    raw = open(FRAME_RAW, "rb").read()
+                    # the writer is three buffers (100 ms) ahead before it reuses this one
+                    raw = open(os.path.join(paths.DIR, f"frame{buf}.raw"), "rb").read()
                     if len(raw) == n:
                         t0 = time.perf_counter()
                         jpg = encode_jpeg(raw, w, h)

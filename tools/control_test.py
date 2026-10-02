@@ -7,9 +7,14 @@ bridge's cmd.json while Jev calls are in flight. Verifies from the files:
 - stop: MAME and bridge exit
 Stdlib only.   python3 tools/control_test.py    log: /tmp/sam2/control_test.log
 """
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from bridge import paths
+
 import json, os, re, time
 
-STATE, CMD, TMP, PRESSES, BLOG = "/tmp/sam2/state.json", "/tmp/sam2/cmd.json", "/tmp/sam2/cmd.tmp", "/tmp/sam2/presses.log", "/tmp/sam2/bridge.log"
+STATE, CMD, TMP = paths.STATE, paths.CMD, os.path.join(paths.DIR, "cmd.tmp")
+PRESSES, BLOG = os.path.join(paths.LOGS, "presses.log"), paths.BRIDGE_LOG
 seq = 0
 def state():
     while True:
@@ -26,7 +31,7 @@ def main():
     while not os.path.exists(STATE): time.sleep(0.2)
     while not state().get("match_live"): time.sleep(0.2)
     time.sleep(12)   # let the fight run (Jev calls in flight)
-    log = open("/tmp/sam2/control_test.log", "w")
+    log = open(os.path.join(paths.LOGS, "control_test.log"), "w")
     def out(s): print(s); log.write(s + "\n"); log.flush()
     # --- pause
     s0 = state(); cmd("pause"); time.sleep(0.6); s1 = state(); n_calls_at_pause = sum(" call " in l for l in bridge_lines())
@@ -60,7 +65,7 @@ def main():
     # tokens still counted for discarded replies: telemetry totals vs sum of in= fields is checked in the bead notes from bridge.log
     # --- stop
     cmd("stop"); time.sleep(4)
-    pids = [l.split() for l in open("/tmp/sam2/pids").read().split("\n") if l.strip()]
+    pids = [l.split() for l in open(paths.PIDS).read().split("\n") if l.strip()]
     alive = {lab: os.system(f"kill -0 {pid} 2>/dev/null") == 0 for pid, lab in pids}
     out(f"STOP: processes alive after stop = {alive}")
     log.close()

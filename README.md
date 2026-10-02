@@ -120,8 +120,9 @@ Every item in PRD §12 "Not yet verified" was verified; the beads carry the evid
 | `docs/protocol.md` | The `state.json` / `action.json` / `control.json` contract. |
 | `.claude/skills/` | `start-app`, `stop-app`, `run-lua`, `close-task`. |
 
-`/tmp/sam2/` is the runtime scratch folder (state, frames, logs, PIDs). Frame files go to
-`/Volumes/sam2ram` when that RAM disk exists, otherwise `/tmp/sam2`.
+Runtime files: logs and PIDs in `/tmp/sam2/`; the hot exchange files (`state.json`, `action.json`,
+`control.json`, frames) in `$SAM2_DIR`, which is `/Volumes/sam2ram` when that RAM disk is mounted
+(`tools/ramdisk.sh`, optional) and `/tmp/sam2` otherwise — see `bridge/paths.py`.
 
 ## Telemetry and cost
 

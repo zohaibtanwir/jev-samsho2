@@ -9,27 +9,51 @@ emulation speed and the view fps (MJPEG frames delivered to the app per
 second, the figure its overlay shows) both come from the bridge telemetry. Prints a summary per section 10 item.
 Deps: websockets (already installed).   python3 tools/acceptance.py
 """
-import asyncio, json, subprocess, threading, time, websockets
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from bridge import paths
+
+import asyncio, json, os, subprocess, sys, threading, time, websockets
 
 APP = "/Users/zohaibtanwir/projects/jev-samsho2/app/src-tauri/target/release/bundle/macos/Jev plays Samurai Shodown II.app"
 B = 'of group "panel" of UI element 1 of scroll area 1 of group 1 of group 1 of window 1'
-LOG = open("/tmp/sam2/acceptance.log", "w")
+LOG = open(os.path.join(paths.LOGS, "acceptance.log"), "w")
 latest = {}
+
+NO_AX = "--no-ax" in sys.argv        # Accessibility unavailable: drive controls through the bridge's cmd.json
+
+
+def send_cmd(cmd: str) -> str:
+    """Control without the UI: the bridge applies cmd.json exactly as it applies a button."""
+    seq = send_cmd.seq = getattr(send_cmd, "seq", 0) + 1
+    tmp = os.path.join(paths.DIR, "cmd.tmp")
+    with open(tmp, "w") as f:
+        json.dump({"seq": seq, "cmd": cmd}, f)
+    os.replace(tmp, paths.CMD)
+    return f"cmd {cmd} (seq {seq})"
+
 
 def osa(cmd):
     r = subprocess.run(["osascript", "-e", f'tell application "System Events" to tell process "app" to {cmd}'], capture_output=True, text=True)
     return (r.stdout or r.stderr).strip()
 
 def click(name, expect_control=None, tries=6):
-    """Raise the window, click; if `expect_control` is given, retry until bridge.log shows that control line."""
-    before = open("/tmp/sam2/bridge.log").read().count(f" control {expect_control} ") if expect_control else 0
+    """Raise the window, click; if `expect_control` is given, retry until bridge.log shows that control line.
+    With --no-ax the same command is sent through cmd.json instead."""
+    if NO_AX:
+        return send_cmd({"Pause": "pause", "Resume": "resume", "Reset": "reset", "Stop": "stop"}.get(name, name.lower()))
+    before = open(paths.BRIDGE_LOG).read().count(f" control {expect_control} ") if expect_control else 0
     for _ in range(tries):
         osa("set frontmost to true"); osa('perform action "AXRaise" of window 1'); time.sleep(0.6)
         r = osa(f'click button "{name}" {B}')
         if not expect_control: return r
         time.sleep(1.2)
-        if open("/tmp/sam2/bridge.log").read().count(f" control {expect_control} ") > before: return r
+        if open(paths.BRIDGE_LOG).read().count(f" control {expect_control} ") > before: return r
     return "click NOT confirmed"
+def buttons_or_na():
+    return "n/a (no Accessibility)" if NO_AX else buttons()
+
+
 def view_fps():
     v = osa('get value of every static text of group 1 of group "game view" of UI element 1 of scroll area 1 of group 1 of group 1 of window 1')
     try: return int(v.split(",")[1].strip())
@@ -91,12 +115,21 @@ def main():
     out = []
     threading.Thread(target=lambda: asyncio.run(ws_reader()), daemon=True).start()
     stop = threading.Event(); threading.Thread(target=logger, args=(stop,), daemon=True).start()
-    subprocess.run(["open", "-n", APP]); time.sleep(5)
-    osa("set frontmost to true")
-    out.append(f"window: {osa('get name of window 1')}; buttons before Start {buttons()}")
-    t_start = time.time(); click("Start")
+    subprocess.run(["open", APP]); time.sleep(6)
+    if not NO_AX:
+        osa("set frontmost to true")
+        out.append(f"window: {osa('get name of window 1')}; buttons before Start {buttons()}")
+    else:
+        # No Accessibility: start the stack ourselves and let the app adopt it (the app
+        # re-adopts a running bridge), so the built app is still the viewer under test.
+        subprocess.Popen([sys.executable, "-m", "bridge.core", "--seconds", "0", "--jev", "--relay", "--launch-mame"],
+                         cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                         stdout=open(os.path.join(paths.LOGS, "bridge.out"), "w"), stderr=subprocess.STDOUT)
+        out.append("no Accessibility: bridge started directly; the built app is the viewer")
+    t_start = time.time()
+    if not NO_AX: click("Start")
     ok = wait_for(lambda: latest.get("phase") == "running", 120)
-    out.append(f"Start -> running: {'yes' if ok else 'NO'} in {time.time()-t_start:.1f} s; buttons {buttons()}")
+    out.append(f"Start -> running: {'yes' if ok else 'NO'} in {time.time()-t_start:.1f} s; buttons {buttons_or_na()}")
     out.append(run_match("match 1", MatchTracker()))
     # Pause / Resume once
     t1 = (latest.get("state") or {}).get("timer"); click("Pause", "pause"); time.sleep(4); t2 = (latest.get("state") or {}).get("timer"); ph = latest.get("phase")
@@ -107,16 +140,16 @@ def main():
     out.append(f"Reset: timer {st.get('timer')} hp {st.get('p1',{}).get('health')}/{st.get('p2',{}).get('health')} presses {pr.get('p1',{}).get('total')}/{pr.get('p2',{}).get('total')} panel calls {p.get('totals',{}).get('calls')} (all should be round-1 / zero)")
     out.append(run_match("match 2", MatchTracker()))
     p = latest.get("panel") or {}; click("Stop", "stop"); time.sleep(10)
-    out.append(f"Stop: buttons {buttons()}; panel totals before stop calls={p.get('totals',{}).get('calls')} cost={p.get('totals',{}).get('cost_usd')}")
+    out.append(f"Stop: buttons {buttons_or_na()}; panel totals before stop calls={p.get('totals',{}).get('calls')} cost={p.get('totals',{}).get('cost_usd')}")
     stop.set(); LOG.close()
     # summary of the log
-    rows = [l.split() for l in open("/tmp/sam2/acceptance.log") if l.strip()]
+    rows = [l.split() for l in open(os.path.join(paths.LOGS, "acceptance.log")) if l.strip()]
     sp = [float(r[5]) for r in rows if r[1] in ("running", "paused") and float(r[5]) > 0]
     fp = [int(r[6]) for r in rows if r[1] == "running" and r[6] != "-"]
     out.append(f"speed while running: n={len(sp)} min={min(sp):.1f} median={sorted(sp)[len(sp)//2]:.1f}; seconds under 99%: {sum(1 for x in sp if x < 99)}")
     out.append(f"view fps while running: n={len(fp)} min={min(fp)} median={sorted(fp)[len(fp)//2]}; samples under 28: {sum(1 for x in fp if x < 28)}")
     for line in out: print(line)
-    open("/tmp/sam2/acceptance_summary.txt", "w").write("\n".join(out) + "\n")
+    open(os.path.join(paths.LOGS, "acceptance_summary.txt"), "w").write("\n".join(out) + "\n")
 
 if __name__ == "__main__":
     main()

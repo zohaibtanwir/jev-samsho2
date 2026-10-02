@@ -5,9 +5,13 @@ Writes one action every `gap` seconds (tmp + rename), sampling state.json
 before and 0.5 s after each, and prints what changed. Stdlib only.
     python3 tools/action_test.py
 """
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from bridge import paths
+
 import json, os, time
 
-ACTION = "/tmp/sam2/action.json"; TMP = "/tmp/sam2/action.tmp"; STATE = "/tmp/sam2/state.json"
+ACTION, TMP, STATE = paths.ACTION, paths.ACTION_TMP, paths.STATE
 
 def state():
     for _ in range(50):
@@ -33,7 +37,7 @@ def main():
     plan = [("p1", "advance"), ("p1", "retreat"), ("p1", "attack"), ("p1", "block"), ("p1", "bait"),
             ("p2", "advance"), ("p2", "retreat"), ("p2", "attack"), ("p2", "block"), ("p2", "bait"),
             ("both", "advance")]
-    log = open("/tmp/sam2/action_test.log", "w")
+    log = open(os.path.join(paths.LOGS, "action_test.log"), "w")
     for i, (who, intent) in enumerate(plan, start=1):
         before = state()
         send(i, p1=intent if who in ("p1", "both") else None, p2=intent if who in ("p2", "both") else None)

@@ -99,8 +99,16 @@ class Handler(BaseHTTPRequestHandler):
             BUS.unregister(cid)
 
 
+class _Server(ThreadingHTTPServer):
+    allow_reuse_address = True
+
+
 def serve(host: str = HOST, port: int = PORT) -> ThreadingHTTPServer:
-    srv = ThreadingHTTPServer((host, port), Handler)
+    try:
+        srv = _Server((host, port), Handler)
+    except OSError as e:
+        raise RuntimeError(f"cannot serve frames on {host}:{port} ({e}). Another bridge is probably still "
+                           f"running: lsof -nP -iTCP:{port} -sTCP:LISTEN") from e
     srv.daemon_threads = True
     threading.Thread(target=srv.serve_forever, name="mjpeg", daemon=True).start()
     return srv

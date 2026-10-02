@@ -54,6 +54,7 @@ fn start_bridge(state: State<Sidecar>, windowed: Option<bool>) -> Result<Status,
     let child = Command::new("/bin/zsh")
         .args(["-lc", &args])
         .current_dir(&repo)
+        .env("SAM2_PARENT_APP", "1")     // the bridge stops itself if we disappear
         .stdout(Stdio::from(log.try_clone().map_err(|e| e.to_string())?))
         .stderr(Stdio::from(log))
         .spawn()

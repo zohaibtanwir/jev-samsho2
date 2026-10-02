@@ -2,6 +2,9 @@
 --   /start-app  (stage 2)  or  /run-lua lua/sam2.lua 3
 local here = debug.getinfo(1, "S").source:match("^@(.*/)") or "./"
 local C = dofile(here .. "sam2core.lua")
+-- always keep the per-second speed + timing log: one line a second, and it is
+-- what the performance work reads (bead sam-yku.11)
+C.SPEED_PATH = os.getenv("SAM2_SPEED_LOG") or "/tmp/sam2/speed.txt"
 C.init()
 local frame = 0
 -- The subscription must stay referenced (a global here) or MAME drops the

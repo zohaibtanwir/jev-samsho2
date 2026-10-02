@@ -4,13 +4,20 @@ host-endian, row-major) to a PNG. Uses Pillow if installed (it is on this
 Mac: 10.4.0), else writes a PPM you can open with Preview.
     python3 tools/raw2png.py [frame.raw] [frame.meta] [out.png]
 """
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from bridge import paths
+
 import struct, sys, zlib
 
 def main():
-    raw_p = sys.argv[1] if len(sys.argv) > 1 else "/tmp/sam2/frame.raw"
-    meta_p = sys.argv[2] if len(sys.argv) > 2 else "/tmp/sam2/frame.meta"
-    out_p = sys.argv[3] if len(sys.argv) > 3 else "/tmp/sam2/frame.png"
-    w, h, n = (int(x) for x in open(meta_p).read().split()[:3])
+    raw_p = sys.argv[1] if len(sys.argv) > 1 else paths.FRAME_RAW
+    meta_p = sys.argv[2] if len(sys.argv) > 2 else paths.FRAME_META
+    out_p = sys.argv[3] if len(sys.argv) > 3 else os.path.join(paths.LOGS, "frame.png")
+    parts = open(meta_p).read().split()
+    w, h, n = (int(x) for x in parts[:3])
+    if len(parts) > 5 and raw_p == paths.FRAME_RAW:   # meta names the current buffer
+        raw_p = os.path.join(paths.DIR, f"frame{int(parts[5])}.raw")
     raw = open(raw_p, "rb").read()
     assert len(raw) == n == w * h * 4, (len(raw), n, w, h)
     # host-endian 32-bit: on Apple silicon little-endian, so bytes are B,G,R,A for an 0xAARRGGBB value

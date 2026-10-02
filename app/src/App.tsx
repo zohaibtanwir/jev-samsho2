@@ -13,6 +13,7 @@ export default function App() {
   const [finalPanel, setFinalPanel] = useState<any>(null);     // kept after Stop (PRD §6)
   const [wsOpen, setWsOpen] = useState(false);
   const startedAt = useRef<number | null>(null);
+  const spawnedByUs = useRef(false);     // a bridge started outside the app (skill, shell) is still ours to show
   const sock = useRef<BridgeSocket | null>(null);
   const frame = useFrameSink();
   const inTauri = "__TAURI_INTERNALS__" in window;
@@ -37,12 +38,23 @@ export default function App() {
     if (phase !== "stopped" || !inTauri || p !== "booting") setPhase(p);   // also adopt a bridge started elsewhere (skill, shell)
   }, [tele]);
   // if the sidecar dies, drop back to stopped
-  useEffect(() => { const id = setInterval(async () => { if (!inTauri) return; try { const s = await bridgeStatus(); if (!s.running && phase !== "stopped") { setPhase("stopped"); setMsg("bridge exited"); } } catch {} }, 2000); return () => clearInterval(id); }, [phase, inTauri]);
+  // Only call it stopped when a bridge WE spawned has gone, or telemetry has dried up.
+  useEffect(() => {
+    const id = setInterval(async () => {
+      if (!inTauri || phase === "stopped") return;
+      const stale = !tele || Date.now() - tele.wall * 1000 > 5000;
+      try {
+        const s = await bridgeStatus();
+        if (!s.running && (spawnedByUs.current || stale)) { spawnedByUs.current = false; setPhase("stopped"); setMsg("bridge exited"); }
+      } catch {}
+    }, 2000);
+    return () => clearInterval(id);
+  }, [phase, inTauri, tele]);
 
   const running = phase === "running" || phase === "between_rounds" || phase === "paused";
 
   async function onStart() {
-    try { setMsg(""); setFinalPanel(null); setTele(null); startedAt.current = Date.now(); const st = await startBridge(false); setPhase("booting"); setMsg(`bridge pid ${st.pid} · booting MAME + Lua start sequence (~30 s)`); }
+    try { setMsg(""); setFinalPanel(null); setTele(null); startedAt.current = Date.now(); const st = await startBridge(false); spawnedByUs.current = true; setPhase("booting"); setMsg(`bridge pid ${st.pid} · booting MAME + Lua start sequence (~30 s)`); }
     catch (e) { setMsg(String(e)); }
   }
   async function onStop() {

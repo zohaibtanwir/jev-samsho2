@@ -6,9 +6,13 @@ a forward jump by P2 (marker file) to cross sides and checks that advance
 now moves each fighter the other way. Stdlib only.
     python3 tools/executor_test.py    log: /tmp/sam2/executor_test.log
 """
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from bridge import paths
+
 import json, os, time
 
-ACTION, TMP, STATE = "/tmp/sam2/action.json", "/tmp/sam2/action.tmp", "/tmp/sam2/state.json"
+ACTION, TMP, STATE = paths.ACTION, paths.ACTION_TMP, paths.STATE
 seq = 0
 
 def state():
@@ -29,7 +33,7 @@ def main():
     while not os.path.exists(STATE): time.sleep(0.2)
     while not state().get("match_live"): time.sleep(0.2)
     time.sleep(2.5)
-    log = open("/tmp/sam2/executor_test.log", "w")
+    log = open(os.path.join(paths.LOGS, "executor_test.log"), "w")
     def out(s): print(s); log.write(s + "\n"); log.flush()
     def trial(who, intent, settle=1.6):
         other = "p2" if who == "p1" else "p1"
@@ -54,7 +58,7 @@ def main():
         if abs(s["p2"]["x"] - s["p1"]["x"]) <= 70: break
         time.sleep(0.1)
     send(p2="none"); time.sleep(0.4)
-    s0 = state(); open("/tmp/sam2/do_jump", "w").close(); time.sleep(1.6); s1 = state()
+    s0 = state(); open(os.path.join(paths.LOGS, "do_jump"), "w").close(); time.sleep(1.6); s1 = state()
     out(f"before jump p1 x={s0['p1']['x']} p2 x={s0['p2']['x']}; after p1 x={s1['p1']['x']} p2 x={s1['p2']['x']} crossed={s1['p2']['x'] < s1['p1']['x']}")
     if s1['p2']['x'] < s1['p1']['x']:
         b = state(); send(p1="advance", p2="advance"); time.sleep(0.8); a = state()

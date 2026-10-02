@@ -1,6 +1,7 @@
 # Lua ⇄ bridge file protocol
 
-Both files live in `/tmp/sam2/`. Every writer writes `<name>.tmp` and then
+Both files live in `$SAM2_DIR` (`/Volumes/sam2ram` when that RAM disk is mounted, else `/tmp/sam2`;
+`bridge/paths.py` and the same two env vars on the Lua side). Every writer writes `<name>.tmp` and then
 renames it over `<name>.json`, so a reader never sees a half-written file
 (PRD §8). Readers detect a new file by the `seq` field, not by mtime.
 
@@ -27,6 +28,14 @@ renames it over `<name>.json`, so a reader never sees a half-written file
 - `timer` is the on-screen round timer.
 - The bridge derives "opponent's last three actions" from the `action`
   history (PRD §8).
+
+## frame.meta + frameN.raw — written by Lua, read by the bridge (sam-7ij.3, sam-yku.11)
+
+`frame.meta` is one line: `width height bytes emu_frame frame_seq buffer`. The pixels are in
+`frame<buffer>.raw` (`frame0.raw`, `frame1.raw`, `frame2.raw`), 32-bit `xRGB` little-endian,
+row-major. Lua keeps all three handles open and writes in place, rotating buffers, so a frame
+costs no create, rename or delete; only `frame.meta` is written atomically. A reader has three
+frames (~100 ms) before the writer returns to the buffer it is reading.
 
 ## action.json — written by the bridge, read by Lua (sam-e8s.1)
 

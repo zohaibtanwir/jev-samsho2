@@ -16,15 +16,17 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 
-SAM2 = "/tmp/sam2"
-STATE_PATH = os.path.join(SAM2, "state.json")
-CONTROL_PATH = os.path.join(SAM2, "control.json")
-CONTROL_TMP = os.path.join(SAM2, "control.tmp")
-CMD_PATH = os.path.join(SAM2, "cmd.json")        # local command input (tests / CLI): {"seq": n, "cmd": "pause"}
+from bridge import paths
+
+SAM2 = paths.LOGS
+STATE_PATH = paths.STATE
+CONTROL_PATH = paths.CONTROL
+CONTROL_TMP = paths.CONTROL_TMP
+CMD_PATH = paths.CMD                             # local command input (tests / CLI): {"seq": n, "cmd": "pause"}
 COMMANDS = ("pause", "resume", "reset", "stop")
-ACTION_PATH = os.path.join(SAM2, "action.json")
-ACTION_TMP = os.path.join(SAM2, "action.tmp")
-LOG_PATH = os.path.join(SAM2, "bridge.log")
+ACTION_PATH = paths.ACTION
+ACTION_TMP = paths.ACTION_TMP
+LOG_PATH = paths.BRIDGE_LOG
 
 INTENTS = ("advance", "retreat", "attack", "block", "bait")
 FIGHTERS = ("p1", "p2")
@@ -34,10 +36,14 @@ IGNORED_PHASES = {"transition"}
 
 # ------------------------------------------------------------ state input
 
-def read_state(path: str = STATE_PATH) -> dict[str, Any] | None:
-    """Return the parsed state.json or None if absent / mid-rename."""
+def read_state(path: str | None = None) -> dict[str, Any] | None:
+    """Return the parsed state.json or None if absent / mid-rename.
+
+    The path is resolved at call time: the exchange dir can change when the
+    RAM disk is mounted during start-up (bead sam-yku.11).
+    """
     try:
-        with open(path) as f:
+        with open(path or paths.STATE) as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return None
@@ -89,11 +95,11 @@ class DummyDecisionMaker:
 class ActionWriter:
     """Writes intent-only action files atomically with an increasing seq."""
 
-    def __init__(self, path: str = ACTION_PATH, tmp: str = ACTION_TMP):
-        self.path, self.tmp, self.seq = path, tmp, 0
+    def __init__(self, path: str | None = None, tmp: str | None = None):
+        self.path, self.tmp, self.seq = path or paths.ACTION, tmp or paths.ACTION_TMP, 0
         self.session = int(time.time())          # Lua resets its seq bookkeeping when this changes
         try:
-            os.remove(path)                      # never let a previous session's file be read first
+            os.remove(self.path)                 # never let a previous session's file be read first
         except FileNotFoundError:
             pass
 
@@ -165,7 +171,7 @@ class Bridge:
         self.history = ActionHistory()
         self.ticker = Ticker()
         self.stats = LoopStats()
-        self.log = open(log_path, "a")
+        self.log = open(log_path or paths.BRIDGE_LOG, "a")
         self.decisions = 0
 
     def _log(self, msg: str) -> None:
@@ -283,15 +289,15 @@ class Bridge:
         elif cmd == "stop":
             self.stop_requested = True
         self.control_seq += 1
-        with open(CONTROL_TMP, "w") as f:
+        with open(paths.CONTROL_TMP, "w") as f:
             json.dump({"seq": self.control_seq, "cmd": cmd}, f)
-        os.replace(CONTROL_TMP, CONTROL_PATH)
+        os.replace(paths.CONTROL_TMP, paths.CONTROL)
         self._log(f"control {cmd} control_seq={self.control_seq} epoch={getattr(getattr(self.dm, 'applier', None), 'epoch', None)} in_flight={self.dm.in_flight() if hasattr(self.dm, 'in_flight') else 0}")
         return {"ok": True, "cmd": cmd, "control_seq": self.control_seq}
 
     def _poll_cmd_file(self) -> None:
         try:
-            with open(CMD_PATH) as f:
+            with open(paths.CMD) as f:
                 c = json.load(f)
         except (FileNotFoundError, json.JSONDecodeError):
             return
@@ -304,11 +310,13 @@ class Bridge:
         self._log(f"bridge start source={self.source} tick={TICK_S:.3f}s seconds={seconds}")
         t_end = time.monotonic() + seconds if seconds > 0 else float("inf")
         last_seq, last_report = None, time.monotonic()
-        parent = os.getppid()
+        # Only watch the parent when the Tauri app spawned us (it sets SAM2_PARENT_APP).
+        # Started from a shell, the shell exits immediately and we would stop ourselves.
+        parent = os.getppid() if os.environ.get("SAM2_PARENT_APP") else None
         while time.monotonic() < t_end and not self.stop_requested:
             t0 = time.perf_counter()
-            if os.getppid() != parent:            # the app that spawned us is gone: never run orphaned
-                self._log("parent process gone; stopping"); self.command("stop"); break
+            if parent is not None and os.getppid() != parent:
+                self._log("the app that started us is gone; stopping"); self.command("stop"); break
             self._poll_cmd_file()
             if self.relay:
                 for cmd in self.relay.drain_commands():
@@ -334,7 +342,7 @@ class Bridge:
 
 MAME_DIR = os.path.expanduser("~/mame")
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MAME_LOG = os.path.join(SAM2, "mame.log")
+MAME_LOG = paths.MAME_LOG
 
 
 def raise_qos() -> str:
@@ -353,11 +361,10 @@ def launch_mame(windowed: bool = False):
            "-autoboot_script", os.path.join(REPO, "lua", "sam2.lua"), "-autoboot_delay", "3"]
     log = open(MAME_LOG, "w")
     env = dict(os.environ)
-    frame_dir = os.environ.get("SAM2_FRAME_DIR") or ("/Volumes/sam2ram" if os.path.isdir("/Volumes/sam2ram") else SAM2)
-    env["SAM2_FRAME_DIR"] = frame_dir
-    os.makedirs(frame_dir, exist_ok=True)
+    env["SAM2_DIR"] = paths.DIR          # Lua reads this: exchange files off the SSD when a RAM disk is mounted
+    env["SAM2_LOGS"] = paths.LOGS
     p = subprocess.Popen(cmd, cwd=MAME_DIR, stdout=log, stderr=subprocess.STDOUT, env=env)
-    with open(os.path.join(SAM2, "mame.pid"), "w") as f:
+    with open(os.path.join(paths.LOGS, "mame.pid"), "w") as f:
         f.write(str(p.pid))
     return p
 
@@ -385,10 +392,26 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--launch-mame", action="store_true", help="launch MAME (from ~/mame, lua/sam2.lua) and own its lifetime; used by the Tauri app")
     ap.add_argument("--mame-window", action="store_true", help="with --launch-mame: windowed instead of -video none")
     a = ap.parse_args(argv)
+    ramdisk_msg = paths.ensure_ramdisk()
+    print(ramdisk_msg)
+    for stale in (paths.CMD, paths.CONTROL):     # a previous session's command must not replay
+        try:
+            os.remove(stale)
+        except FileNotFoundError:
+            pass
     mame = None
     qos = raise_qos()
     if a.launch_mame:
         mame = launch_mame(windowed=a.mame_window)
+    try:
+        return _run(a, mame, ramdisk_msg, qos)
+    except BaseException:
+        stop_mame(mame)
+        print(paths.release())
+        raise
+
+
+def _run(a, mame, ramdisk_msg: str, qos: str) -> int:
     t0 = time.monotonic()
     while True:
         st = read_state()
@@ -402,7 +425,11 @@ def main(argv: list[str] | None = None) -> int:
     relay = None
     if a.relay:
         from bridge.relay import Relay
-        relay = Relay(); relay.start()
+        try:
+            relay = Relay(); relay.start()
+        except (RuntimeError, OSError) as e:
+            print(f"relay not started: {e}")
+            stop_mame(mame); print(paths.release()); return 2
     from bridge.telemetry import Telemetry
     baseline = None
     if a.jev:
@@ -415,7 +442,7 @@ def main(argv: list[str] | None = None) -> int:
         dm, source = DummyDecisionMaker(), "dummy"
     bridge = Bridge(dm, source=source, relay=relay)
     bridge.tele = Telemetry({"p1": "Earthquake", "p2": "Nakoruru"}, baseline)
-    bridge._log(f"network baseline (median TCP connect) = {baseline} ms; qos: {qos}")
+    bridge._log(f"network baseline (median TCP connect) = {baseline} ms; qos: {qos}; {ramdisk_msg}")
     def _stop(signum, frame):
         bridge.stop_requested = True
     signal.signal(signal.SIGTERM, _stop); signal.signal(signal.SIGINT, _stop)
@@ -423,6 +450,7 @@ def main(argv: list[str] | None = None) -> int:
         bridge.run(a.seconds)
     finally:
         stop_mame(mame)
+        print(paths.release())
     if hasattr(dm, "close"):
         dm.close()
     if relay:
