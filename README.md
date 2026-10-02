@@ -130,8 +130,9 @@ buttons held and total presses by source (Jev or reflex), response time (last an
 labelled **estimated**, because the API returns no timing field, so it is the round trip minus a TCP
 baseline measured at startup — calls made, stale responses discarded, tokens and cost.
 
-Measured: round trip p50 ≈ 355 ms, ~880 input tokens per call, input billed at $0.042/M and **output at
-zero**. A full two-match session with both fighters at 3 Hz cost **$0.036** (`bd show sam-yku.9`).
+Measured: round trip p50 **353 ms** (`bd show sam-l4r.2`), ~873 input and ~73 output tokens per call
+(`bd show sam-yku.7`: 36,656 in / 3,075 out over 42 calls), input billed at $0.042/M and **output at zero**.
+A full session — two matches, both fighters at 3 Hz — cost **$0.036** (`bd show sam-yku.9`, acceptance run 3).
 
 ## Known limits
 
